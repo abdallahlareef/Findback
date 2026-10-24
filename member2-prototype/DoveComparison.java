@@ -29,18 +29,31 @@ public class DoveComparison {
 
         return Outcome.CONTRADICTION;
     }
+static void check(String name, String owner, String finder,
+                  Outcome expected) {
+    Outcome actual = compareSerialSuffix(owner, finder);
 
-    public static void main(String[] args) {
-        System.out.println("Same suffix: "
-                + compareSerialSuffix("A82F", "A82F"));
-
-        System.out.println("Missing suffix: "
-                + compareSerialSuffix("A82F", ""));
-
-        System.out.println("Different suffix: "
-                + compareSerialSuffix("A82F", "B91K"));
-
-        System.out.println("Formatting difference: "
-                + compareSerialSuffix(" a82f ", "A82F"));
+    if (actual != expected) {
+        throw new AssertionError(
+                name + ": expected " + expected + ", got " + actual);
     }
+
+    System.out.println("PASS: " + name);
+}
+    public static void main(String[] args) {
+    check("Equal suffixes", "A82F", "A82F", Outcome.MATCH);
+    check("Different suffixes", "A82F", "B91K", Outcome.CONTRADICTION);
+    check("Missing owner value", null, "A82F", Outcome.UNKNOWN);
+    check("Missing finder value", "A82F", null, Outcome.UNKNOWN);
+    check("Both values missing", null, null, Outcome.UNKNOWN);
+    check("Empty value", "A82F", "", Outcome.UNKNOWN);
+    check("Spaces only", "   ", "A82F", Outcome.UNKNOWN);
+    check("Formatting differences", " a82f ", "A82F", Outcome.MATCH);
+    check("Too short", "A82", "A82F", Outcome.UNKNOWN);
+    check("Too long", "A82F9", "A82F", Outcome.UNKNOWN);
+    check("Meaningful punctuation", "A-2F", "A82F", Outcome.UNKNOWN);
+    check("Matching invalid values", "???", "???", Outcome.UNKNOWN);
+
+    System.out.println("All 12 tests passed.");
+}
 }
