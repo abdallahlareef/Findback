@@ -7,6 +7,8 @@ integrating them into the shared Spring Boot application.
 
 ## Current features
 
+- In-memory claimant/item submission limits: one initial submission
+  plus two staff-requested supplements, with duplicate-request handling.
 - In-memory evidence history with an immutable baseline and new correction versions.
 - Compare four-character serial suffixes:
   MATCH, UNKNOWN or CONTRADICTION.
@@ -31,7 +33,8 @@ Run these commands from the main Findback folder:
     java -cp member2-prototype/build DistinctClueCounter
     java -cp member2-prototype/build DoveAssessment
     java -cp member2-prototype/build EvidenceHistory
-Expected passing checks: 12 + 8 + 6 + 6 + 6 = 38.
+    java -cp member2-prototype/build SubmissionLimit
+Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 = 50.
 
 ## Prototype assumptions
 
@@ -49,7 +52,8 @@ The team must agree on category-specific evidence rules before integration.
 - Private evidence forms and APIs.
 - Database storage and protected evidence handling.
 - Database-backed evidence history, report/author links and correction permissions.
-- Claimant/item submission limits and staff-requested supplements.
+- Persistent submission counters, real staff authorization and saving
+- Evidence together with its submission count in one database transaction.
 - Login, case permissions and staff-only result access.
 - Audit events and integration with claims and handover.
 
