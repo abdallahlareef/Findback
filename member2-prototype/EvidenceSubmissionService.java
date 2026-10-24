@@ -120,6 +120,54 @@ public class EvidenceSubmissionService {
                 service.history(pair).get(0).values()
                         .get("serial_suffix").equals("A82F"));
 
-        System.out.println("All 5 submission-service tests passed.");
+                // Staff permits one more supplement.
+        service.requestSupplement(pair);
+
+        boolean changedRetryBlocked = false;
+
+        try {
+            service.submit(
+                    pair,
+                    "request-2",
+                    Map.of("serial_suffix", "ZZ99"),
+                    "Typing correction");
+        } catch (IllegalArgumentException expected) {
+            changedRetryBlocked = true;
+        }
+
+        check("Changed evidence with an old request ID is rejected",
+                changedRetryBlocked);
+
+        check("Rejected retry does not change history",
+                service.history(pair).size() == 2
+                        && service.history(pair).get(1).values()
+                        .get("serial_suffix").equals("A82E"));
+
+        // The rejected retry must not consume the staff permission.
+        var third = service.submit(
+                pair,
+                "request-3",
+                Map.of("serial_suffix", "A82E", "engraving", "TEST"),
+                "Added an identifying detail");
+
+        check("Rejected retry does not consume the supplement",
+                third.number() == 3 && service.history(pair).size() == 3);
+
+        boolean fourthBlocked = false;
+
+        try {
+            service.submit(
+                    pair,
+                    "request-4",
+                    Map.of("serial_suffix", "B91K"),
+                    "Another correction");
+        } catch (IllegalStateException expected) {
+            fourthBlocked = true;
+        }
+
+        check("Fourth submission creates no extra version",
+                fourthBlocked && service.history(pair).size() == 3);
+
+        System.out.println("All 9 submission-service tests passed.");
     }
 }

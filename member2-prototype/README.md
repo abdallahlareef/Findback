@@ -36,7 +36,7 @@ Run these commands from the main Findback folder:
     java -cp member2-prototype/build EvidenceHistory
     java -cp member2-prototype/build SubmissionLimit
     java -cp member2-prototype/build EvidenceSubmissionService
-Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 + 5 = 55.
+Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 + 9 = 59.
 
 ## Prototype assumptions
 
