@@ -6,7 +6,8 @@ Develop and test the evidence comparison rules independently before
 integrating them into the shared Spring Boot application.
 
 ## Current features
-
+- Connected submission limits and evidence history: blocked submissions
+  create no version, and identical retries return the original version.
 - In-memory claimant/item submission limits: one initial submission
   plus two staff-requested supplements, with duplicate-request handling.
 - In-memory evidence history with an immutable baseline and new correction versions.
@@ -34,7 +35,8 @@ Run these commands from the main Findback folder:
     java -cp member2-prototype/build DoveAssessment
     java -cp member2-prototype/build EvidenceHistory
     java -cp member2-prototype/build SubmissionLimit
-Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 = 50.
+    java -cp member2-prototype/build EvidenceSubmissionService
+Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 + 5 = 55.
 
 ## Prototype assumptions
 
