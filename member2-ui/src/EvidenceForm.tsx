@@ -41,6 +41,9 @@ function EvidenceForm({ role }: EvidenceFormProps) {
     )
   }
 
+  const versionLabel =
+    submissionType === 'initial' ? 'Baseline · Version 1' : 'Supplement · Version 2'
+
   return (
     <main className="page">
       <header>
@@ -86,6 +89,10 @@ function EvidenceForm({ role }: EvidenceFormProps) {
             on the server.
           </p>
         </div>
+
+        <p className="version-label" role="status">
+          {versionLabel}
+        </p>
 
         <p className="hint" role="status">
           {submissionType === 'initial'
