@@ -6,6 +6,9 @@ Develop and test the evidence comparison rules independently before
 integrating them into the shared Spring Boot application.
 
 ## Current features
+
+- In-memory verification history recording report IDs, evidence version
+  numbers, comparison-rule version, timestamp and serial comparison result.
 - Connected submission limits and evidence history: blocked submissions
   create no version, and identical retries return the original version.
 - In-memory claimant/item submission limits: one initial submission
@@ -36,7 +39,8 @@ Run these commands from the main Findback folder:
     java -cp member2-prototype/build EvidenceHistory
     java -cp member2-prototype/build SubmissionLimit
     java -cp member2-prototype/build EvidenceSubmissionService
-Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 + 9 = 59.
+    java -cp member2-prototype/build VerificationHistory
+Expected passing checks: 12 + 8 + 6 + 6 + 6 + 12 + 9 + 6 = 65.
 
 ## Prototype assumptions
 
@@ -58,6 +62,8 @@ The team must agree on category-specific evidence rules before integration.
 - Evidence together with its submission count in one database transaction.
 - Login, case permissions and staff-only result access.
 - Audit events and integration with claims and handover.
+- Persistent verification attempts and validation that evidence versions
+  belong to the specified reports and claim.
 
 ## Important boundaries
 
