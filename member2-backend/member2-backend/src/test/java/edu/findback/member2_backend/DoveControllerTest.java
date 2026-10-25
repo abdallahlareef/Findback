@@ -47,4 +47,11 @@ class DoveControllerTest {
 
         assertEquals("MATCH", response.outcome());
     }
+
+    @Test
+    void missingRequestReturnsUnknown() {
+        var response = controller.compare(null);
+
+        assertEquals("UNKNOWN", response.outcome());
+    }
 }

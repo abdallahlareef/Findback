@@ -16,7 +16,13 @@ public class DoveController {
     }
 
     @PostMapping("/compare")
-    public CompareResponse compare(@RequestBody CompareRequest request) {
+    public CompareResponse compare(
+            @RequestBody(required = false) CompareRequest request) {
+
+        if (request == null) {
+            return new CompareResponse("UNKNOWN");
+        }
+
         String owner = normalize(request.ownerSuffix());
         String finder = normalize(request.finderSuffix());
 
