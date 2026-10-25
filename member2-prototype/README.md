@@ -7,6 +7,8 @@ integrating them into the shared Spring Boot application.
 
 ## Current features
 
+- Spring Boot comparison API for four-character serial suffixes.
+- Automated backend tests for Match, Contradiction, Unknown and normalization.
 - In-memory verification history recording report IDs, evidence version
   numbers, comparison-rule version, timestamp and serial comparison result.
 - Connected submission limits and evidence history: blocked submissions
@@ -70,3 +72,24 @@ The team must agree on category-specific evidence rules before integration.
 STRONG does not approve ownership or authorize collection.
 ON_HOLD is currently a calculated result; it does not update a real claim.
 This prototype does not yet demonstrate evidence privacy or access control.
+## Backend prototype
+
+The standalone Spring Boot project is in `member2-backend/member2-backend`.
+Run it from that folder with:
+
+    .\mvnw.cmd spring-boot:run
+
+The local comparison endpoint accepts invented values at
+`POST /api/member2/dove/compare`.
+
+Example JSON request:
+
+    {"ownerSuffix":"A82F","finderSuffix":"A82F"}
+
+The prototype returns `MATCH`, `CONTRADICTION` or `UNKNOWN`.
+It has no authentication or case-level authorization. Do not send real
+private evidence to it.
+
+Run backend tests from that folder with:
+
+    .\mvnw.cmd test
