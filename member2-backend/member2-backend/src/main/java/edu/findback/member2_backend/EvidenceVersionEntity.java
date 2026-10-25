@@ -15,10 +15,12 @@ import jakarta.persistence.UniqueConstraint;
 
 @Entity
 @Table(
-        name = "evidence_version",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_evidence_report_version",
-                columnNames = {"report_id", "version_number"}))
+    name = "evidence_version",
+    uniqueConstraints = @UniqueConstraint(
+        name = "uk_evidence_report_version",
+        columnNames = {"report_id", "version_number"}
+    )
+)
 public class EvidenceVersionEntity {
 
     public enum Provenance {
@@ -33,6 +35,12 @@ public class EvidenceVersionEntity {
 
     @Column(name = "report_id", nullable = false, length = 100)
     private String reportId;
+
+    @Column(name = "claimant_id", nullable = false, length = 120)
+    private String claimantId;
+
+    @Column(name = "found_item_id", nullable = false, length = 120)
+    private String foundItemId;
 
     @Column(name = "version_number", nullable = false)
     private int versionNumber;
@@ -61,13 +69,14 @@ public class EvidenceVersionEntity {
     }
 
     public EvidenceVersionEntity(
-            String reportId,
-            int versionNumber,
-            Provenance provenance,
-            String serialSuffix,
-            String privateMark,
-            String accessoryDescription,
-            String correctionReason) {
+        String reportId,
+        int versionNumber,
+        Provenance provenance,
+        String serialSuffix,
+        String privateMark,
+        String accessoryDescription,
+        String correctionReason
+    ) {
         this.reportId = reportId;
         this.versionNumber = versionNumber;
         this.provenance = provenance;
@@ -92,28 +101,72 @@ public class EvidenceVersionEntity {
         return reportId;
     }
 
+    public void setReportId(String reportId) {
+        this.reportId = reportId;
+    }
+
+    public String getClaimantId() {
+        return claimantId;
+    }
+
+    public void setClaimantId(String claimantId) {
+        this.claimantId = claimantId;
+    }
+
+    public String getFoundItemId() {
+        return foundItemId;
+    }
+
+    public void setFoundItemId(String foundItemId) {
+        this.foundItemId = foundItemId;
+    }
+
     public int getVersionNumber() {
         return versionNumber;
+    }
+
+    public void setVersionNumber(int versionNumber) {
+        this.versionNumber = versionNumber;
     }
 
     public Provenance getProvenance() {
         return provenance;
     }
 
+    public void setProvenance(Provenance provenance) {
+        this.provenance = provenance;
+    }
+
     public String getSerialSuffix() {
         return serialSuffix;
+    }
+
+    public void setSerialSuffix(String serialSuffix) {
+        this.serialSuffix = serialSuffix;
     }
 
     public String getPrivateMark() {
         return privateMark;
     }
 
+    public void setPrivateMark(String privateMark) {
+        this.privateMark = privateMark;
+    }
+
     public String getAccessoryDescription() {
         return accessoryDescription;
     }
 
+    public void setAccessoryDescription(String accessoryDescription) {
+        this.accessoryDescription = accessoryDescription;
+    }
+
     public String getCorrectionReason() {
         return correctionReason;
+    }
+
+    public void setCorrectionReason(String correctionReason) {
+        this.correctionReason = correctionReason;
     }
 
     public Instant getCreatedAt() {
