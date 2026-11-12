@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: findback-postgres
+    environment:
+      POSTGRES_DB: findback
+      POSTGRES_USER: findback
+      POSTGRES_PASSWORD: findback_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - findback_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  findback_postgres_data:
