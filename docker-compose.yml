@@ -1,16 +1,15 @@
-﻿services:
+services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17
     container_name: findback-postgres
-    restart: unless-stopped
     environment:
-      POSTGRES_DB: findback_db
-      POSTGRES_USER: findback_user
-      POSTGRES_PASSWORD: findback_dev_password
+      POSTGRES_DB: findback
+      POSTGRES_USER: findback
+      POSTGRES_PASSWORD: findback_dev
     ports:
       - "5432:5432"
     volumes:
-      - findback_pgdata:/var/lib/postgresql/data
+      - findback_postgres_data:/var/lib/postgresql/data
 
 volumes:
-  findback_pgdata:
+  findback_postgres_data:
