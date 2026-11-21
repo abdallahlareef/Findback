@@ -14,6 +14,7 @@ public interface CrossModulePorts {
 
     interface DoveEvaluationPort {
         DoveSummaryDto evaluateOrGetSummary(Long claimId, Long lostReportId, Long foundReportId);
+        default boolean hasPendingSupplement(Long claimId) { return false; }
     }
 
     interface OperationsPort {

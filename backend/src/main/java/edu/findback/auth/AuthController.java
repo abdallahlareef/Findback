@@ -19,6 +19,10 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
+        @GetMapping("/csrf")
+        public java.util.Map<String,String> csrf(org.springframework.security.web.csrf.CsrfToken token) {
+                return java.util.Map.of("headerName",token.getHeaderName(),"token",token.getToken());
+        }
 
         private final AuthService authService;
 
@@ -70,6 +74,8 @@ public class AuthController {
                                                 loginRequest.password());
 
                 Authentication authentication = authenticationManager.authenticate(token);
+                request.getSession();
+                request.changeSessionId();
 
                 SecurityContext context = SecurityContextHolder.createEmptyContext();
 

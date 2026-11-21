@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { submitStudentClaimApi, withdrawStudentClaimApi } from './member3Api';
 
 export const StudentClaimPortal: React.FC = () => {
@@ -23,8 +23,8 @@ export const StudentClaimPortal: React.FC = () => {
       setMessage(`Success! Claim #${actualId} submitted. Status is now ${saved.status}.`);
       setWithdrawClaimId(actualId); // This will now auto-fill correctly!
       
-    } catch (err: any) {
-      setError(err.message || 'Failed to submit claim. Check active duplicate restrictions (FR-06).');
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : '') || 'Failed to submit claim. Check active duplicate restrictions (FR-06).');
     }
   };
 
@@ -37,8 +37,8 @@ export const StudentClaimPortal: React.FC = () => {
       await withdrawStudentClaimApi(Number(withdrawClaimId), studentId);
       setMessage(`Success! Claim #${withdrawClaimId} was withdrawn (FR-18).`);
       setWithdrawClaimId('');
-    } catch (err: any) {
-      setError(err.message || 'Failed to withdraw. It may already be approved or does not exist.');
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : '') || 'Failed to withdraw. It may already be approved or does not exist.');
     }
   };
 
