@@ -53,7 +53,8 @@ public class ClaimReviewService {
         throw new RuntimeException("Cannot withdraw a claim that has already been approved.");
     }
     
-    claimRepo.delete(claim);
+    claim.setStatus(ClaimStatus.WITHDRAWN);
+    claimRepo.save(claim);
 }
 
     @Transactional
@@ -91,6 +92,9 @@ public class ClaimReviewService {
         ReportSummaryDto lostReport = reportPort.getReportById(lostReportId);
         ReportSummaryDto foundReport = reportPort.getReportById(foundReportId);
 
+        if (!"LOST".equals(lostReport.type()) || !"FOUND".equals(foundReport.type()) || foundReport.authorId().equals(claimantId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A claim requires your lost report and another user's found report.");
+        }
         if (!lostReport.authorId().equals(claimantId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You must own the lost report to submit a claim.");
         }
@@ -143,6 +147,10 @@ public class ClaimReviewService {
 
         switch (action.toUpperCase()) {
             case "APPROVE" -> {
+                DoveSummaryDto currentDove = dovePort.evaluateOrGetSummary(claimId, claim.getLostReportId(), claim.getFoundReportId());
+                if (currentDove.hasCriticalIdentifierConflict() || dovePort.hasPendingSupplement(claimId)) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Resolve outstanding evidence review before approval.");
+                }
                 if (prevStatus != ClaimStatus.UNDER_REVIEW) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "Only UNDER_REVIEW claims can be approved.");
                 }

@@ -18,12 +18,14 @@ public class ReportController {
 
         private final ReportService reportService;
         private final DiscoveryService discoveryService;
+        private final edu.findback.evidence.EvidenceService evidenceService;
 
         public ReportController(
                         ReportService reportService,
-                        DiscoveryService discoveryService) {
+                        DiscoveryService discoveryService, edu.findback.evidence.EvidenceService evidenceService) {
                 this.reportService = reportService;
                 this.discoveryService = discoveryService;
+                this.evidenceService = evidenceService;
         }
 
         @PostMapping
@@ -51,7 +53,7 @@ public class ReportController {
         @GetMapping("/{lostReportId}/candidates")
         public List<CandidateMatchResponse> getCandidates(
                         @PathVariable Long lostReportId) {
-
+                evidenceService.requireDiscoveryBaseline(lostReportId);
                 return discoveryService
                                 .findCandidates(lostReportId);
         }

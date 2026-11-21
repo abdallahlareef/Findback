@@ -48,7 +48,7 @@ public class SecurityConfig {
                         SecurityContextRepository securityContextRepository) throws Exception {
 
                 http
-                                .csrf(AbstractHttpConfigurer::disable)
+                                .csrf(csrf -> {})
 
                                 .securityContext(context -> context.securityContextRepository(
                                                 securityContextRepository))
@@ -56,8 +56,10 @@ public class SecurityConfig {
                                 .authorizeHttpRequests(auth -> auth
                                                 .requestMatchers(
                                                                 "/api/auth/register",
+                                                                "/api/auth/csrf",
                                                                 "/api/auth/login")
                                                 .permitAll()
+                                                .requestMatchers("/api/evidence/staff/**", "/api/v1/claims/staff/**").hasRole("ADMIN")
                                                 .anyRequest().authenticated())
 
                                 .exceptionHandling(exceptions -> exceptions

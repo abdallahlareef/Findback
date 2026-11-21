@@ -11,6 +11,7 @@ public class MockCrossModuleAdapters {
     private static final Logger log = LoggerFactory.getLogger(MockCrossModuleAdapters.class);
 
     @Bean
+    @org.springframework.context.annotation.Profile("module3-standalone-demo")
     public ReportLookupPort mockReportLookupPort() {
         return reportId -> {
             if (reportId >= 600L) {
@@ -23,6 +24,7 @@ public class MockCrossModuleAdapters {
     }
 
     @Bean
+    @org.springframework.context.annotation.Profile("module3-standalone-demo")
     public DoveEvaluationPort mockDoveEvaluationPort() {
         return (claimId, lostReportId, foundReportId) -> {
             if (lostReportId != null && lostReportId == 509L) {

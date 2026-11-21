@@ -79,8 +79,8 @@ export const StaffReviewDashboard: React.FC = () => {
       setStatusBanner(
         `Saved Claim #${saved.claimId} in PostgreSQL (Status: ${saved.status}, Risk: ${saved.riskTier})!`
       );
-    } catch (err: any) {
-      setErrorMsg(`Backend Response: ${err.message}`);
+    } catch (err: unknown) {
+      setErrorMsg(`Backend Response: ${err instanceof Error ? err.message : 'Request failed.'}`);
     }
   };
 
@@ -102,8 +102,8 @@ export const StaffReviewDashboard: React.FC = () => {
         )
       );
       setStatusBanner(`Found Item #${activeCase.foundReportId} logged IN_CUSTODY at ${storageRef} in PostgreSQL.`);
-    } catch (err: any) {
-      setErrorMsg(`Backend Error: ${err.message}`);
+    } catch (err: unknown) {
+      setErrorMsg(`Backend Error: ${err instanceof Error ? err.message : 'Request failed.'}`);
     }
   };
 
