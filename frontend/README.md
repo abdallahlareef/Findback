@@ -1,75 +1,28 @@
-# React + TypeScript + Vite
+# FindBack shared frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Member 1 shared React + TypeScript application. Member 2's standalone `member2-ui/` remains separate.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```sh
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Vite serves the app locally and proxies `/api` to `http://localhost:8080`. The frontend uses the Spring-managed session cookie with `credentials: 'include'`; it does not store session identifiers or credentials in browser storage.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Set `VITE_API_BASE_URL` only when the API is hosted at a different base path. The development proxy is intended for local work.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Build
 
+```sh
+npm run build
 ```
+
+## Integrated member modules
+
+- `/evidence` opens the Member 2 evidence workspace. Save the required private baseline there before viewing a LOST report's candidates.
+- `/claims` opens the Member 3 student claim portal.
+- `/staff/reviews` opens the Member 3 staff review dashboard. Backend authorization remains authoritative.
+
+The shared Member 1 pages remain available at `/dashboard`, `/report/lost`, `/report/found`, `/my-reports`, `/search`, and `/reports/:id/candidates`.

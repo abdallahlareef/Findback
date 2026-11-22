@@ -6,6 +6,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.time.LocalDate;
+import org.springframework.data.jpa.domain.Specification;
 
 @Service
 public class ReportService {
@@ -83,6 +85,27 @@ public class ReportService {
                 .stream()
                 .map(ReportResponse::from)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SafeReportSummaryResponse> search(ReportType type, String category,
+            String campusZone, LocalDate eventDate, ReportStatus status) {
+        Specification<Report> spec = (root, query, cb) -> cb.conjunction();
+        if (type != null) spec = spec.and((root, query, cb) -> cb.equal(root.get("type"), type));
+        if (category != null && !category.isBlank()) {
+            String value = category.trim().toLowerCase(java.util.Locale.ROOT);
+            spec = spec.and((root, query, cb) -> cb.equal(cb.lower(root.get("category")), value));
+        }
+        if (campusZone != null && !campusZone.isBlank()) {
+            String value = campusZone.trim().toLowerCase(java.util.Locale.ROOT);
+            spec = spec.and((root, query, cb) -> cb.equal(cb.lower(root.get("campusZone")), value));
+        }
+        if (eventDate != null) spec = spec.and((root, query, cb) -> cb.equal(root.get("eventDate"), eventDate));
+        if (status != null) spec = spec.and((root, query, cb) -> cb.equal(root.get("status"), status));
+
+        return reportRepository.findAll(spec, org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.DESC, "createdAt", "id"))
+                .stream().map(SafeReportSummaryResponse::from).toList();
     }
 
     private String clean(String value) {
