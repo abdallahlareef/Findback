@@ -4,6 +4,9 @@ import edu.findback.report.*;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
 import java.util.Comparator;
 import java.util.List;
@@ -21,13 +24,15 @@ public class DiscoveryService {
 
     @Transactional(readOnly = true)
     public List<CandidateMatchResponse> findCandidates(
-            Long lostReportId
+            Long lostReportId,
+            String authenticatedEmail
     ) {
 
         Report lostReport = reportRepository
                 .findById(lostReportId)
                 .orElseThrow(
-                        () -> new IllegalArgumentException(
+                        () -> new ResponseStatusException(
+                                HttpStatus.NOT_FOUND,
                                 "Report not found"
                         )
                 );
@@ -35,6 +40,14 @@ public class DiscoveryService {
         if (lostReport.getType() != ReportType.LOST) {
             throw new IllegalArgumentException(
                     "Candidate discovery requires a LOST report"
+            );
+        }
+
+        if (!lostReport.getAuthor()
+                .getEmail()
+                .equalsIgnoreCase(authenticatedEmail)) {
+            throw new AccessDeniedException(
+                    "You cannot run discovery for another user's report"
             );
         }
 

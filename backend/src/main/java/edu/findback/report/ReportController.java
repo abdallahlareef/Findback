@@ -11,6 +11,7 @@ import edu.findback.discovery.CandidateMatchResponse;
 import edu.findback.discovery.DiscoveryService;
 
 import java.util.List;
+import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/api/reports")
@@ -50,9 +51,20 @@ public class ReportController {
 
         @GetMapping("/{lostReportId}/candidates")
         public List<CandidateMatchResponse> getCandidates(
-                        @PathVariable Long lostReportId) {
+                        @PathVariable Long lostReportId,
+                        Authentication authentication) {
 
                 return discoveryService
-                                .findCandidates(lostReportId);
+                                .findCandidates(lostReportId, authentication.getName());
+        }
+
+        @GetMapping("/search")
+        public List<SafeReportSummaryResponse> search(
+                        @RequestParam(required = false) ReportType type,
+                        @RequestParam(required = false) String category,
+                        @RequestParam(required = false) String campusZone,
+                        @RequestParam(required = false) LocalDate eventDate,
+                        @RequestParam(required = false) ReportStatus status) {
+                return reportService.search(type, category, campusZone, eventDate, status);
         }
 }
