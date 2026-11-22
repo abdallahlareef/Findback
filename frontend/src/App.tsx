@@ -8,6 +8,9 @@ import { LoginPage, RegisterPage } from './pages/AuthPages'
 import { MyReportsPage } from './pages/MyReportsPage'
 import { ReportFormPage } from './pages/ReportFormPage'
 import { SearchPage } from './pages/SearchPage'
+import EvidenceWorkspace from './features/evidence/EvidenceWorkspace'
+import { StudentClaimPortal } from './features/claims/StudentClaimPortal'
+import { StaffReviewDashboard } from './features/claims/StaffReviewDashboard'
 
 export function App() {
   const { user, loading } = useAuth()
@@ -24,7 +27,12 @@ export function App() {
         <Route path="/my-reports" element={<MyReportsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/reports/:id/candidates" element={<CandidatesPage />} />
+        <Route path="/claims" element={<StudentClaimPortal />} />
+        <Route element={<RequireAdmin />}>
+          <Route path="/staff/reviews" element={<StaffReviewDashboard />} />
+        </Route>
       </Route>
+      <Route path="/evidence" element={<EvidenceWorkspace />} />
     </Route>
     <Route path="*" element={<Navigate to={user ? '/dashboard' : '/login'} replace />} />
   </Routes>
@@ -33,4 +41,9 @@ export function App() {
 function RequireAuth() {
   const { user } = useAuth()
   return user ? <Outlet /> : <Navigate to="/login" replace />
+}
+
+function RequireAdmin() {
+  const { user } = useAuth()
+  return user?.role === 'ADMIN' ? <Outlet /> : <Navigate to="/dashboard" replace />
 }

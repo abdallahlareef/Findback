@@ -23,13 +23,27 @@ export class ApiRequestError extends Error {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
+  const method = (init.method ?? 'GET').toUpperCase()
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   headers.set('Accept', 'application/json')
 
+  if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+    const csrfResponse = await fetch(`${API_BASE}/api/auth/csrf`, {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    })
+    if (!csrfResponse.ok) {
+      throw new ApiRequestError(csrfResponse.status, 'Could not establish a secure session. Reload and try again.')
+    }
+    const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
+    headers.set(csrf.headerName, csrf.token)
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    method,
     headers,
     credentials: 'include',
   })

@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -62,6 +63,11 @@ class ReportHttpTests {
                 "2026-11-11", "JBL", "Tune Buds");
         createReport(user("finderLow"), "FOUND", "Books", "Cafeteria", "ACTIVE",
                 "2026-10-01", null, null);
+
+        mvc.perform(post("/api/evidence/reports/{id}/baseline", lost.get("id").asLong())
+                        .session(owner).with(csrf()).contentType(APPLICATION_JSON)
+                        .content("{\"serialSuffix\":\"A1B2\",\"privateMark\":\"small scratch\",\"accessoryDescription\":\"blue sleeve\"}"))
+                .andExpect(status().isOk());
 
         MvcResult candidateResult = mvc.perform(get("/api/reports/{id}/candidates", lost.get("id").asLong())
                         .session(owner))
@@ -132,7 +138,7 @@ class ReportHttpTests {
                  "authorId":999999,"status":"%s"}
                 """.formatted(type, category, brand == null ? "null" : "\"" + brand + "\"",
                 model == null ? "null" : "\"" + model + "\"", zone, eventDate, status);
-        MvcResult result = mvc.perform(post("/api/reports").session(session).contentType(APPLICATION_JSON)
+        MvcResult result = mvc.perform(post("/api/reports").session(session).with(csrf()).contentType(APPLICATION_JSON)
                         .content(payload))
                 .andExpect(status().isCreated()).andReturn();
         JsonNode response = objectMapper.readTree(result.getResponse().getContentAsString());
@@ -144,10 +150,10 @@ class ReportHttpTests {
     private MockHttpSession user(String prefix) throws Exception {
         String email = prefix.toLowerCase() + "@example.test";
         String password = "test-password-123";
-        mvc.perform(post("/api/auth/register").contentType(APPLICATION_JSON)
+        mvc.perform(post("/api/auth/register").with(csrf()).contentType(APPLICATION_JSON)
                         .content(("{\"name\":\"%s\",\"email\":\"%s\",\"password\":\"%s\"}").formatted(prefix, email, password)))
                 .andExpect(status().isCreated());
-        MvcResult login = mvc.perform(post("/api/auth/login").contentType(APPLICATION_JSON)
+        MvcResult login = mvc.perform(post("/api/auth/login").with(csrf()).contentType(APPLICATION_JSON)
                         .content(("{\"email\":\"%s\",\"password\":\"%s\"}").formatted(email, password)))
                 .andExpect(status().isOk()).andReturn();
         HttpSession session = login.getRequest().getSession(false);

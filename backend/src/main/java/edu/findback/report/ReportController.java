@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import edu.findback.discovery.CandidateMatchResponse;
 import edu.findback.discovery.DiscoveryService;
+import edu.findback.evidence.EvidenceService;
 
 import java.util.List;
 import java.time.LocalDate;
@@ -19,12 +20,15 @@ public class ReportController {
 
         private final ReportService reportService;
         private final DiscoveryService discoveryService;
+        private final EvidenceService evidenceService;
 
         public ReportController(
                         ReportService reportService,
-                        DiscoveryService discoveryService) {
+                        DiscoveryService discoveryService,
+                        EvidenceService evidenceService) {
                 this.reportService = reportService;
                 this.discoveryService = discoveryService;
+                this.evidenceService = evidenceService;
         }
 
         @PostMapping
@@ -53,9 +57,10 @@ public class ReportController {
         public List<CandidateMatchResponse> getCandidates(
                         @PathVariable Long lostReportId,
                         Authentication authentication) {
-
-                return discoveryService
+                List<CandidateMatchResponse> candidates = discoveryService
                                 .findCandidates(lostReportId, authentication.getName());
+                evidenceService.requireDiscoveryBaseline(lostReportId);
+                return candidates;
         }
 
         @GetMapping("/search")
