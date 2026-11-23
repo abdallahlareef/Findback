@@ -3,8 +3,15 @@ import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiRequestError, api } from '../../api/client'
 import type { CandidateMatch, ReportResponse } from '../../types/api'
-import { claimsApi, errorMessage } from './member3Api'
-import type { ClaimStatus, ClaimantClaim } from './member3Api'
+import { RECONSIDERATION_MAX_LENGTH, claimsApi, errorMessage } from './member3Api'
+import type { ClaimStatus, ClaimantClaim, ReconsiderationStatus } from './member3Api'
+
+const RECONSIDERATION_NOTE: Record<ReconsiderationStatus, string | null> = {
+  NONE: null,
+  PENDING: 'You asked staff to reconsider this claim. They will review your message.',
+  ACCEPTED: 'Staff reopened this claim after your reconsideration request.',
+  DECLINED: 'Staff reviewed your reconsideration request. The original decision stands.',
+}
 
 const STATUS_LABEL: Record<ClaimStatus, string> = {
   SUBMITTED: 'Submitted',
@@ -17,13 +24,13 @@ const STATUS_LABEL: Record<ClaimStatus, string> = {
 }
 
 const STATUS_STYLE: Record<ClaimStatus, string> = {
-  SUBMITTED: 'bg-slate-100 text-slate-700',
-  UNDER_REVIEW: 'bg-blue-50 text-blue-800',
-  ON_HOLD: 'bg-amber-50 text-amber-800',
-  APPROVED: 'bg-emerald-50 text-emerald-800',
-  REJECTED: 'bg-red-50 text-red-800',
-  WITHDRAWN: 'bg-slate-100 text-slate-500',
-  COMPLETED: 'bg-emerald-50 text-emerald-800',
+  SUBMITTED: 'bg-fb-chip text-fb-ink',
+  UNDER_REVIEW: 'bg-fb-mint text-fb-green-dark',
+  ON_HOLD: 'bg-fb-warn-bg text-fb-warn',
+  APPROVED: 'bg-fb-mint text-fb-green-dark',
+  REJECTED: 'bg-fb-error-bg text-fb-error',
+  WITHDRAWN: 'bg-fb-chip text-fb-muted',
+  COMPLETED: 'bg-fb-mint text-fb-green-dark',
 }
 
 function describeReport(report: { category: string; colour: string; campusZone: string; brand?: string | null }) {
@@ -46,6 +53,8 @@ export function StudentClaimPortal() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [reconsiderClaimId, setReconsiderClaimId] = useState<number | null>(null)
+  const [reconsiderReason, setReconsiderReason] = useState('')
 
   useEffect(() => {
     let active = true
@@ -128,35 +137,52 @@ export function StudentClaimPortal() {
     }
   }
 
+  async function handleRequestReconsideration(e: FormEvent, claim: ClaimantClaim) {
+    e.preventDefault()
+    if (!reconsiderReason.trim()) {
+      setError('Describe the new proof you have so staff can decide whether to reopen your claim.')
+      return
+    }
+    setMessage(null)
+    setError(null)
+    setBusy(true)
+    try {
+      await claimsApi.requestReconsideration(claim.claimId, reconsiderReason.trim())
+      setMessage(`Your reconsideration request for claim #${claim.claimId} was sent to staff.`)
+      setReconsiderClaimId(null)
+      setReconsiderReason('')
+      reloadClaims()
+    } catch (cause: unknown) {
+      setError(errorMessage(cause, 'The reconsideration request was not sent.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-900">Claim a found item</h2>
-        <p className="mt-1 text-sm text-slate-600">
+    <div className="page-wrap narrow-page space-y-6">
+      <div>
+        <p className="eyebrow">CLAIMS</p>
+        <h1>Claim a found item</h1>
+        <p className="page-intro mb-0!">
           Choose one of your lost reports, then the found report you believe is your item. Staff review every claim
           and check the item physically before anything is released.
         </p>
+      </div>
 
-        {message && (
-          <div role="status" className="mt-4 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-            {message}
-          </div>
-        )}
-        {error && (
-          <div role="alert" className="mt-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {error}
-          </div>
-        )}
+      {message && <div role="status" className="alert alert-success">{message}</div>}
+      {error && <div role="alert" className="alert alert-error">{error}</div>}
 
-        <form onSubmit={handleSubmitClaim} className="mt-6 space-y-4">
+      <div className="surface">
+        <form onSubmit={handleSubmitClaim} className="space-y-4">
           <div>
-            <label htmlFor="claim-lost-report" className="block text-xs font-semibold text-slate-700">Your lost report *</label>
+            <label htmlFor="claim-lost-report" className="block text-xs font-semibold text-fb-ink">Your lost report *</label>
             <select
               id="claim-lost-report"
               value={lostReportId ?? ''}
               onChange={(e) => chooseLostReport(e.target.value)}
               disabled={reportsLoading}
-              className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm"
             >
               <option value="">{reportsLoading ? 'Loading your reports…' : 'Select a lost report'}</option>
               {lostReports.map((r) => (
@@ -164,30 +190,30 @@ export function StudentClaimPortal() {
               ))}
             </select>
             {!reportsLoading && lostReports.length === 0 && (
-              <p className="mt-2 text-xs text-slate-600">
-                You have no open lost reports. <Link className="font-semibold text-blue-700 underline" to="/report/lost">Report a lost item</Link> first.
+              <p className="mt-2! text-xs text-fb-muted">
+                You have no open lost reports. <Link className="font-semibold text-fb-green underline" to="/report/lost">Report a lost item</Link> first.
               </p>
             )}
           </div>
 
           {lostReportId !== null && (
             <fieldset>
-              <legend className="block text-xs font-semibold text-slate-700">Found report you are claiming *</legend>
-              {candidatesLoading && <p className="mt-2 text-sm text-slate-600">Finding similar found reports…</p>}
+              <legend className="block text-xs font-semibold text-fb-ink">Found report you are claiming *</legend>
+              {candidatesLoading && <p className="mt-2! text-sm text-fb-muted">Finding similar found reports…</p>}
               {baselineRequired && (
-                <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                <p className="mt-2! rounded-lg border border-fb-warn-line bg-fb-warn-bg p-2 text-xs text-fb-warn">
                   Save your private baseline evidence in the <Link className="font-semibold underline" to="/evidence">Evidence Workspace</Link> before claiming.
                 </p>
               )}
               {!candidatesLoading && !baselineRequired && candidates.length === 0 && (
-                <p className="mt-2 text-sm text-slate-600">No matching found reports yet. Check back later.</p>
+                <p className="mt-2! text-sm text-fb-muted">No matching found reports yet. Check back later.</p>
               )}
               <div className="mt-2 space-y-2">
                 {candidates.map((c) => (
                   <label
                     key={c.reportId}
-                    className={`flex cursor-pointer items-center justify-between gap-3 rounded border p-3 text-sm ${
-                      foundReportId === c.reportId ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 hover:border-slate-300'
+                    className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 text-sm ${
+                      foundReportId === c.reportId ? 'border-fb-green bg-fb-mint/50' : 'border-fb-line hover:border-fb-mint-line'
                     }`}
                   >
                     <span className="flex items-center gap-3">
@@ -200,7 +226,7 @@ export function StudentClaimPortal() {
                       />
                       <span>Found report #{c.reportId} – {describeReport(c)}</span>
                     </span>
-                    <span className="text-xs text-slate-500">{c.score.toFixed(1)} match score</span>
+                    <span className="text-xs text-fb-muted">{c.score.toFixed(1)} match score</span>
                   </label>
                 ))}
               </div>
@@ -210,35 +236,35 @@ export function StudentClaimPortal() {
           <button
             type="submit"
             disabled={busy || lostReportId === null || foundReportId === null}
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="button button-primary button-small"
           >
             Submit ownership claim
           </button>
         </form>
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900">My claims</h3>
-        <p className="mt-1 text-sm text-slate-600">You can withdraw a claim until staff make a final decision on it.</p>
+      <div className="surface">
+        <h3>My claims</h3>
+        <p className="mt-1! text-sm text-fb-muted">You can withdraw a claim until staff make a final decision on it.</p>
         {claimsLoading ? (
-          <p className="mt-4 text-sm text-slate-600">Loading your claims…</p>
+          <p className="mt-4! text-sm text-fb-muted">Loading your claims…</p>
         ) : claims.length === 0 ? (
-          <p className="mt-4 text-sm text-slate-600">You have not submitted any claims yet.</p>
+          <p className="mt-4! text-sm text-fb-muted">You have not submitted any claims yet.</p>
         ) : (
-          <ul className="mt-4 divide-y divide-slate-100">
+          <ul className="mt-4 divide-y divide-fb-line">
             {claims.map((claim) => {
               const lost = lostById.get(claim.lostReportId)
               return (
                 <li key={claim.claimId} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">Claim #{claim.claimId}</p>
-                    <p className="text-xs text-slate-600">
+                    <p className="text-sm font-semibold text-fb-ink">Claim #{claim.claimId}</p>
+                    <p className="text-xs text-fb-muted">
                       Lost report #{claim.lostReportId}{lost ? ` (${describeReport(lost)})` : ''} → Found report #{claim.foundReportId}
                     </p>
-                    <p className="text-xs text-slate-500">Submitted {new Date(claim.createdAt).toLocaleString()}</p>
+                    <p className="text-xs text-fb-muted">Submitted {new Date(claim.createdAt).toLocaleString()}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_STYLE[claim.status]}`}>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_STYLE[claim.status]}`}>
                       {STATUS_LABEL[claim.status]}
                     </span>
                     {claim.withdrawable && (
@@ -246,12 +272,58 @@ export function StudentClaimPortal() {
                         type="button"
                         disabled={busy}
                         onClick={() => handleWithdraw(claim)}
-                        className="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                        className="button button-small bg-fb-coral text-white hover:bg-fb-error"
                       >
                         Withdraw
                       </button>
                     )}
+                    {claim.canRequestReconsideration && reconsiderClaimId !== claim.claimId && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => { setReconsiderClaimId(claim.claimId); setReconsiderReason('') }}
+                        className="button button-secondary button-small text-fb-green"
+                      >
+                        Request reconsideration
+                      </button>
+                    )}
                   </div>
+                  {RECONSIDERATION_NOTE[claim.reconsiderationStatus] && (
+                    <p className="w-full text-xs text-fb-muted">{RECONSIDERATION_NOTE[claim.reconsiderationStatus]}</p>
+                  )}
+                  {reconsiderClaimId === claim.claimId && (
+                    <form onSubmit={(e) => handleRequestReconsideration(e, claim)} className="w-full space-y-2 rounded-lg border border-fb-mint-line bg-fb-mint p-3">
+                      <label htmlFor={`reconsider-${claim.claimId}`} className="block text-xs font-semibold text-fb-green-dark">
+                        What new proof do you have? (sent to staff; you can ask once per claim) *
+                      </label>
+                      <textarea
+                        id={`reconsider-${claim.claimId}`}
+                        rows={3}
+                        maxLength={RECONSIDERATION_MAX_LENGTH}
+                        value={reconsiderReason}
+                        onChange={(e) => setReconsiderReason(e.target.value)}
+                        placeholder="e.g. I found the original box, which shows the serial number ending in A82F."
+                        className="w-full rounded-lg border border-fb-mint-line bg-white px-3 py-2 text-sm"
+                      />
+                      <p className="text-xs text-fb-green-dark">Don't paste full serial numbers here unless staff ask; describe what you can show them at the desk.</p>
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busy}
+                          className="button button-primary button-small"
+                        >
+                          Send to staff
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReconsiderClaimId(null)}
+                          className="button button-secondary button-small"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </li>
               )
             })}

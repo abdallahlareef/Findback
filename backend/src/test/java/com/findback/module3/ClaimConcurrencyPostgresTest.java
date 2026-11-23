@@ -125,7 +125,8 @@ class ClaimConcurrencyPostgresTest {
         Report r = new Report();
         r.setAuthor(author);
         r.setType(type);
-        r.setCategory("EARBUDS");
+        // LOW risk, so the automatic serial match alone satisfies FR-10 and the tests focus on races.
+        r.setCategory("Umbrella");
         r.setColour("Black");
         r.setCampusZone("Library");
         r.setEventDate(LocalDate.now());
@@ -176,6 +177,11 @@ class ClaimConcurrencyPostgresTest {
                 "{\"action\":\"APPROVE\",\"reason\":\"Physical check complete\",\"physicalCheckNotes\":\"\"}");
     }
 
+    MockHttpServletRequestBuilder handoverRequest(Long claimId) {
+        return json(post("/api/v1/claims/staff/claims/" + claimId + "/handover"),
+                "{\"handoverCode\":\"ONE-TIME-123\",\"identityCheckNotes\":\"Student ID checked\"}");
+    }
+
     /** Starts all tasks at the same instant and returns their HTTP statuses, sorted. */
     static List<Integer> race(List<Callable<Integer>> tasks) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(tasks.size());
@@ -186,8 +192,17 @@ class ClaimConcurrencyPostgresTest {
                 futures.add(executor.submit(() -> { start.await(); return task.call(); }));
             }
             start.countDown();
+            // Wait for every task before failing, so no request outlives this test and leaks rows into the next one.
             List<Integer> statuses = new ArrayList<>();
-            for (Future<Integer> future : futures) statuses.add(future.get(30, TimeUnit.SECONDS));
+            Exception firstFailure = null;
+            for (Future<Integer> future : futures) {
+                try {
+                    statuses.add(future.get(30, TimeUnit.SECONDS));
+                } catch (Exception e) {
+                    if (firstFailure == null) firstFailure = e;
+                }
+            }
+            if (firstFailure != null) throw firstFailure;
             Collections.sort(statuses);
             return statuses;
         } finally {
@@ -264,10 +279,8 @@ class ClaimConcurrencyPostgresTest {
         Long id = createClaim(claimant("owner@pg.test"));
         perform(intakeRequest(), staff).andExpect(status().isOk());
         perform(approveRequest(id), staff).andExpect(status().isOk());
-        MockHttpServletRequestBuilder handover = json(post("/api/v1/claims/staff/claims/" + id + "/handover"),
-                "{\"handoverCode\":\"ONE-TIME-123\",\"identityCheckNotes\":\"Student ID checked\"}");
-
-        assertEquals(expected(1, 1), race(List.of(call(handover, staff), call(handover, otherStaff))));
+        // Each request gets its own builder: MockMvc builders are not thread-safe.
+        assertEquals(expected(1, 1), race(List.of(call(handoverRequest(id), staff), call(handoverRequest(id), otherStaff))));
         assertEquals(ClaimStatus.COMPLETED, claims.findById(id).orElseThrow().getStatus());
         assertEquals(CustodyStatus.RETURNED, custody.findById(found).orElseThrow().getCustodyStatus());
         assertEquals(1, custodyEvents.findAll().stream().filter(e -> e.getEventType().equals("RELEASED_TO_OWNER")).count());

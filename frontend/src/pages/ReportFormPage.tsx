@@ -4,6 +4,10 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import type { ReportPayload, ReportType } from '../types/api'
 import { ErrorMessage } from '../components/Feedback'
+import { ITEM_CATEGORIES, OTHER_CATEGORY, RISK_LEVELS, riskLabel, riskRank, suggestRiskLevel } from '../features/claims/riskLevels'
+import type { RiskLevel } from '../features/claims/riskLevels'
+
+const CATEGORY_GROUPS: RiskLevel[] = ['HIGH', 'MEDIUM', 'LOW']
 
 export function ReportFormPage({ type }: { type: ReportType }) {
   const navigate = useNavigate()
@@ -11,13 +15,39 @@ export function ReportFormPage({ type }: { type: ReportType }) {
   const found = type === 'FOUND'
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [riskLevel, setRiskLevel] = useState<RiskLevel | ''>('')
+  const [riskChosenByUser, setRiskChosenByUser] = useState(false)
+  const [suggestedRisk, setSuggestedRisk] = useState<RiskLevel | null>(null)
+  const [categoryChoice, setCategoryChoice] = useState('')
+  const [otherCategory, setOtherCategory] = useState('')
+
+  // Pre-select the recommended level from the category until the user picks one themselves.
+  function applySuggestion(suggestion: RiskLevel | null) {
+    setSuggestedRisk(suggestion)
+    if (!riskChosenByUser) setRiskLevel(suggestion ?? '')
+  }
+
+  function onCategoryChoice(value: string) {
+    setCategoryChoice(value)
+    applySuggestion(value === OTHER_CATEGORY
+      ? suggestRiskLevel(otherCategory)
+      : ITEM_CATEGORIES.find((c) => c.value === value)?.risk ?? null)
+  }
+
+  function onOtherCategory(text: string) {
+    setOtherCategory(text)
+    applySuggestion(suggestRiskLevel(text))
+  }
+
+  const chosenPolicy = RISK_LEVELS.find((l) => l.value === riskLevel)?.policy
+  const belowSuggestion = riskLevel !== '' && suggestedRisk !== null && riskRank(riskLevel) < riskRank(suggestedRisk)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(''); setBusy(true)
     const data = new FormData(event.currentTarget)
     const report: ReportPayload = {
       type,
-      category: String(data.get('category')).trim(),
+      category: (categoryChoice === OTHER_CATEGORY ? otherCategory : categoryChoice).trim(),
       brand: optional(data.get('brand')),
       model: optional(data.get('model')),
       colour: String(data.get('colour')).trim(),
@@ -26,6 +56,7 @@ export function ReportFormPage({ type }: { type: ReportType }) {
       timeFrom: optional(data.get('timeFrom')),
       timeTo: optional(data.get('timeTo')),
       safeDescription: optional(data.get('safeDescription')),
+      riskLevel: String(data.get('riskLevel')) as RiskLevel,
     }
     try { await api.createReport(report); navigate('/my-reports', { replace: true, state: { created: true } }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save the report.') }
@@ -38,7 +69,22 @@ export function ReportFormPage({ type }: { type: ReportType }) {
     <form className="surface form-stack report-form" onSubmit={submit}>
       {error && <ErrorMessage>{error}</ErrorMessage>}
       <div className="form-grid">
-        <label>Category<input name="category" required maxLength={100} placeholder="e.g. Electronics" /></label>
+        <label>Category
+          <select name="categoryChoice" required value={categoryChoice} onChange={(e) => onCategoryChoice(e.target.value)}>
+            <option value="" disabled>Choose the type of item</option>
+            {CATEGORY_GROUPS.map((level) => (
+              <optgroup key={level} label={riskLabel(level)}>
+                {ITEM_CATEGORIES.filter((c) => c.risk === level).map((c) => <option key={c.value} value={c.value}>{c.value}</option>)}
+              </optgroup>
+            ))}
+            <option value={OTHER_CATEGORY}>Other…</option>
+          </select>
+        </label>
+        {categoryChoice === OTHER_CATEGORY && (
+          <label>Describe the item type
+            <input name="otherCategory" required maxLength={100} value={otherCategory} onChange={(e) => onOtherCategory(e.target.value)} placeholder="e.g. Skateboard" />
+          </label>
+        )}
         <label>Colour<input name="colour" required maxLength={50} placeholder="e.g. Black" /></label>
         <label>Brand <span className="optional">Optional</span><input name="brand" maxLength={100} /></label>
         <label>Model <span className="optional">Optional</span><input name="model" maxLength={100} /></label>
@@ -47,6 +93,24 @@ export function ReportFormPage({ type }: { type: ReportType }) {
         <label>Time from <span className="optional">Optional</span><input name="timeFrom" type="time" /></label>
         <label>Time to <span className="optional">Optional</span><input name="timeTo" type="time" /></label>
       </div>
+      <label>Item risk level
+        <select
+          name="riskLevel"
+          required
+          value={riskLevel}
+          onChange={(e) => { setRiskChosenByUser(true); setRiskLevel(e.target.value as RiskLevel | '') }}
+        >
+          <option value="" disabled>Choose how valuable or sensitive the item is</option>
+          {RISK_LEVELS.map((level) => <option key={level.value} value={level.value}>{level.label} – e.g. {level.examples}</option>)}
+        </select>
+        <span className="optional">
+          {suggestedRisk ? `Recommended for this category: ${riskLabel(suggestedRisk)}. ` : ''}
+          {chosenPolicy ?? 'Claims on this item are verified according to its risk level.'}
+        </span>
+        {belowSuggestion && suggestedRisk && (
+          <span className="optional">Lower than recommended. Claims will still be checked as at least {riskLabel(suggestedRisk)}.</span>
+        )}
+      </label>
       <label>Safe description <span className="optional">Optional · max 500 characters</span><textarea name="safeDescription" rows={4} maxLength={500} placeholder="Only include details that are okay for anyone to see." /></label>
       <div className="notice"><strong>Keep it safe.</strong> Don’t include serial numbers, private marks, passwords, PINs, receipts, or other private evidence.</div>
       <div className="form-actions"><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Submit report'}</button><button className="button button-secondary" type="button" onClick={() => navigate(location.state?.from ?? '/dashboard')}>Cancel</button></div>

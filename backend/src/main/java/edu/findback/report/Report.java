@@ -54,6 +54,10 @@ public class Report {
     @Column(nullable = false, length = 20)
     private ReportStatus status = ReportStatus.ACTIVE;
 
+    /** Reporter-selected item risk (LOW/MEDIUM/HIGH). Claims never use less than the category implies. */
+    @Column(name = "risk_level", length = 10)
+    private String riskLevel;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -178,6 +182,14 @@ public class Report {
 
     public void setStatus(ReportStatus status) {
         this.status = status;
+    }
+
+    public String getRiskLevel() {
+        return riskLevel;
+    }
+
+    public void setRiskLevel(String riskLevel) {
+        this.riskLevel = riskLevel;
     }
 
     public LocalDateTime getCreatedAt() {

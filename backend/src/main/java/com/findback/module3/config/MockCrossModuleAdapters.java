@@ -1,38 +1,18 @@
 package com.findback.module3.config;
 
-import com.findback.module3.ports.CrossModulePorts.*;
+import com.findback.module3.ports.CrossModulePorts.OperationsPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Stand-in for Member 4's operations service (audit, notifications, handover credentials) until it
+ * exists. Report lookup and DOVE are real: Member 2's EvidenceService implements those ports.
+ */
 @Configuration
 public class MockCrossModuleAdapters {
     private static final Logger log = LoggerFactory.getLogger(MockCrossModuleAdapters.class);
-
-    @Bean
-    @org.springframework.context.annotation.Profile("module3-standalone-demo")
-    public ReportLookupPort mockReportLookupPort() {
-        return reportId -> {
-            if (reportId >= 600L) {
-                return new ReportSummaryDto(reportId, 99L, "FOUND", "EARBUDS",
-                        "Black JBL Tune Earbuds", "Main Library", true);
-            }
-            return new ReportSummaryDto(reportId, 2012L, "LOST", "EARBUDS",
-                    "Black JBL Tune Earbuds", "Main Library", true);
-        };
-    }
-
-    @Bean
-    @org.springframework.context.annotation.Profile("module3-standalone-demo")
-    public DoveEvaluationPort mockDoveEvaluationPort() {
-        return (claimId, lostReportId, foundReportId) -> {
-            if (lostReportId != null && lostReportId == 509L) {
-                return new DoveSummaryDto(claimId, "REVIEW_REQUIRED", 1, 1, 1, true, 2);
-            }
-            return new DoveSummaryDto(claimId, "STRONG", 3, 0, 0, false, 1);
-        };
-    }
 
     @Bean
     public OperationsPort mockOperationsPort() {

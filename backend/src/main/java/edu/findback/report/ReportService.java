@@ -60,6 +60,10 @@ public class ReportService {
 
         report.setStatus(ReportStatus.ACTIVE);
 
+        if (request.riskLevel() != null && !request.riskLevel().isBlank()) {
+            report.setRiskLevel(request.riskLevel().trim().toUpperCase(java.util.Locale.ROOT));
+        }
+
         return ReportResponse.from(
                 reportRepository.save(report)
         );

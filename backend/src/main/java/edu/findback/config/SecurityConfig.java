@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -60,6 +61,8 @@ public class SecurityConfig {
                                                                 "/api/auth/login")
                                                 .permitAll()
                                                 .requestMatchers("/api/evidence/staff/**", "/api/v1/claims/staff/**").hasRole("ADMIN")
+                                                // Admin-only accounts: staff cannot file lost/found reports.
+                                                .requestMatchers(HttpMethod.POST, "/api/reports").hasRole("USER")
                                                 .anyRequest().authenticated())
 
                                 .exceptionHandling(exceptions -> exceptions

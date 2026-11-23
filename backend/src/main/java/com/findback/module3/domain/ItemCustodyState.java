@@ -18,6 +18,12 @@ public class ItemCustodyState {
     private Long reservedByClaimId;
     private boolean disputeBlocked = false;
 
+    /** Who raised the current dispute (put an approved claim on hold), when and why. Cleared on resolution. */
+    private Long disputeRaisedById;
+    private OffsetDateTime disputeRaisedAt;
+    @Column(length = 255)
+    private String disputeReason;
+
     @Column(nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
@@ -38,5 +44,26 @@ public class ItemCustodyState {
     public Long getReservedByClaimId() { return reservedByClaimId; }
     public void setReservedByClaimId(Long reservedByClaimId) { this.reservedByClaimId = reservedByClaimId; }
     public boolean isDisputeBlocked() { return disputeBlocked; }
+    public OffsetDateTime getUpdatedAt() { return updatedAt; }
+    public Long getDisputeRaisedById() { return disputeRaisedById; }
+    public OffsetDateTime getDisputeRaisedAt() { return disputeRaisedAt; }
+    public String getDisputeReason() { return disputeReason; }
+
+    /** Blocks the item from being reserved until a different staff member resolves the dispute. */
+    public void raiseDispute(Long staffId, String reason) {
+        this.disputeBlocked = true;
+        this.disputeRaisedById = staffId;
+        this.disputeRaisedAt = OffsetDateTime.now();
+        this.disputeReason = reason;
+        this.updatedAt = this.disputeRaisedAt;
+    }
+
+    public void clearDispute() {
+        this.disputeBlocked = false;
+        this.disputeRaisedById = null;
+        this.disputeRaisedAt = null;
+        this.disputeReason = null;
+        this.updatedAt = OffsetDateTime.now();
+    }
     public void setDisputeBlocked(boolean disputeBlocked) { this.disputeBlocked = disputeBlocked; }
 }

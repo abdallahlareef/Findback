@@ -86,7 +86,10 @@ class EvidenceIntegrationTest {
         baselines();Long first=createClaim();
         Long staffLost=report(staff,ReportType.LOST);
         perform(json("/api/evidence/reports/"+staffLost+"/baseline",DATA),staff).andExpect(status().isOk());
+        // Staff accounts cannot claim (admin-only accounts): model a student who claimed, then became staff.
+        staff.setRole(Role.USER);users.save(staff);
         perform(json("/api/v1/claims","{\"lostReportId\":"+staffLost+",\"foundReportId\":"+found+"}"),staff).andExpect(status().isOk());
+        staff.setRole(Role.ADMIN);users.save(staff);
         perform(get("/api/evidence/staff/claims/"+first),staff).andExpect(status().isForbidden());
     }
     @Test void discoveryRequiresOwnedBaseline() throws Exception {
@@ -161,6 +164,8 @@ class EvidenceIntegrationTest {
     @Test void evidenceChangeAfterApprovalHoldsCaseAndReleasesReservation() throws Exception {
         baselines();Long id=createClaim();
         claimService.recordCustodyIntake(staff.getId(),found,"TEST-LOCKER","Synthetic item");
+        // FR-10: one matching characteristic only suffices for LOW risk; this test is about evidence holds, not tiers.
+        Claim lowRisk=claims.findById(id).orElseThrow(); lowRisk.setRiskTier(RiskTier.LOW); claims.save(lowRisk);
         claimService.recordStaffDecision(staff.getId(),id,"APPROVE","Physical check complete","Synthetic check");
         assertEquals(ClaimStatus.APPROVED,claims.findById(id).orElseThrow().getStatus());
         request(id,UUID.randomUUID().toString());
