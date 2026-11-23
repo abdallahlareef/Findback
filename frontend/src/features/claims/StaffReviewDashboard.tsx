@@ -1,197 +1,167 @@
-import React, { useState } from 'react';
-import {
-  type StaffClaimCaseView,
-  createClaimApi,
-  recordCustodyIntakeApi,
-  submitStaffDecisionApi,
-} from './member3Api';
+import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
+import { claimsApi, errorMessage } from './member3Api'
+import type { ClaimStatus, DecisionAction, RiskTier, StaffClaimCaseView } from './member3Api'
 
-const INITIAL_CASES: StaffClaimCaseView[] = [
-  {
-    claimId: 1,
-    claimantId: 2012,
-    claimantName: 'Student #2012',
-    lostReportId: 501,
-    foundReportId: 602,
-    itemTitle: 'Black JBL Tune 230NC Earbuds',
-    category: 'EARBUDS',
-    campusZone: 'Main Library',
-    status: 'UNDER_REVIEW',
-    riskTier: 'MEDIUM',
-    custodyStatus: 'REPORTED',
-    disputeBlocked: false,
-    doveSummary: {
-      strengthLabel: 'STRONG',
-      matchCount: 3,
-      unknownCount: 0,
-      contradictionCount: 0,
-      hasCriticalConflict: false,
-      submissionsUsed: 1,
-    },
-    competingActiveClaimsCount: 1,
-    createdAt: '2026-10-29T09:30:00Z',
-  },
-  {
-    claimId: 2,
-    claimantId: 2088,
-    claimantName: 'Student #2088',
-    lostReportId: 509,
-    foundReportId: 602,
-    itemTitle: 'Black JBL Tune 230NC Earbuds',
-    category: 'EARBUDS',
-    campusZone: 'Main Library',
-    status: 'ON_HOLD',
-    riskTier: 'HIGH',
-    escalationReason: 'Competing claim with conflicting serial suffix.',
-    custodyStatus: 'REPORTED',
-    disputeBlocked: false,
-    doveSummary: {
-      strengthLabel: 'REVIEW_REQUIRED',
-      matchCount: 1,
-      unknownCount: 1,
-      contradictionCount: 1,
-      hasCriticalConflict: true,
-      submissionsUsed: 2,
-    },
-    competingActiveClaimsCount: 1,
-    createdAt: '2026-10-29T10:15:00Z',
-  },
-];
+const CLOSED: ClaimStatus[] = ['REJECTED', 'WITHDRAWN', 'COMPLETED']
 
-export const StaffReviewDashboard: React.FC = () => {
-  const [cases, setCases] = useState<StaffClaimCaseView[]>(INITIAL_CASES);
-  const [selectedId, setSelectedId] = useState<number>(1);
-  const [staffId, setStaffId] = useState<number>(9001);
-  const [storageRef, setStorageRef] = useState('SEC-LOCKER-B12');
-  const [conditionNotes, setConditionNotes] = useState('Matte black charging case, minor scuff on lid');
-  const [decisionReason, setDecisionReason] = useState('');
-  const [physicalNotes, setPhysicalNotes] = useState('');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+const NEXT_STATUS: Record<DecisionAction, ClaimStatus> = {
+  APPROVE: 'APPROVED',
+  HOLD: 'ON_HOLD',
+  REJECT: 'REJECTED',
+  RECONSIDER: 'UNDER_REVIEW',
+}
 
-  const activeCase = cases.find((c) => c.claimId === selectedId) || cases[0];
+/** UI hints only. The server re-checks every rule and its answer is what counts. */
+function approvalBlockers(c: StaffClaimCaseView): string[] {
+  const blockers: string[] = []
+  if (c.status !== 'UNDER_REVIEW') blockers.push(`Only UNDER_REVIEW claims can be approved (this one is ${c.status}).`)
+  if (c.custodyStatus !== 'IN_CUSTODY') blockers.push(`Physical custody must be IN_CUSTODY (currently ${c.custodyStatus}).`)
+  if (c.disputeBlocked) blockers.push('The item is blocked by an unresolved dispute. Resolve it in section 1 first.')
+  if (c.doveSummary.hasCriticalConflict) blockers.push('DOVE reports an unresolved critical identifier conflict.')
+  if (c.doveSummary.pendingSupplement) blockers.push('A requested evidence supplement is still pending.')
+  return blockers
+}
 
-  const handleSeedDatabaseClaim = async () => {
-    setErrorMsg(null);
-    setStatusBanner(null);
+export function StaffReviewDashboard() {
+  const { user } = useAuth()
+  const [cases, setCases] = useState<StaffClaimCaseView[]>([])
+  const [loading, setLoading] = useState(true)
+  const [queueVersion, setQueueVersion] = useState(0)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+
+  const [storageRef, setStorageRef] = useState('')
+  const [conditionNotes, setConditionNotes] = useState('')
+  const [decisionReason, setDecisionReason] = useState('')
+  const [physicalNotes, setPhysicalNotes] = useState('')
+  const [riskTier, setRiskTier] = useState<RiskTier>('HIGH')
+  const [riskReason, setRiskReason] = useState('')
+  const [disputeResolution, setDisputeResolution] = useState('')
+
+  const [busy, setBusy] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [statusBanner, setStatusBanner] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    claimsApi.reviewQueue()
+      .then((data) => { if (active) setCases(data) })
+      .catch((cause: unknown) => { if (active) setErrorMsg(errorMessage(cause, 'Could not load the review queue.')) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [queueVersion])
+
+  const activeCase = cases.find((c) => c.claimId === selectedId) ?? cases[0] ?? null
+
+  function refreshQueue() {
+    setQueueVersion((v) => v + 1)
+  }
+
+  async function run(action: () => Promise<unknown>, success: string, fallbackError: string) {
+    setErrorMsg(null)
+    setStatusBanner(null)
+    setBusy(true)
     try {
-      const saved = await createClaimApi(2012, 501, 602);
-      setStatusBanner(
-        `Saved Claim #${saved.claimId} in PostgreSQL (Status: ${saved.status}, Risk: ${saved.riskTier})!`
-      );
-    } catch (err: unknown) {
-      setErrorMsg(`Backend Response: ${err instanceof Error ? err.message : 'Request failed.'}`);
+      await action()
+      setStatusBanner(success)
+      return true
+    } catch (cause: unknown) {
+      setErrorMsg(errorMessage(cause, fallbackError))
+      return false
+    } finally {
+      setBusy(false)
+      refreshQueue()
     }
-  };
+  }
 
-  const handleCustodyConfirm = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setStatusBanner(null);
+  async function handleCustodyConfirm(e: FormEvent) {
+    e.preventDefault()
+    if (!activeCase) return
     if (!storageRef.trim() || !conditionNotes.trim()) {
-      setErrorMsg('Storage reference and physical condition notes are required for custody intake.');
-      return;
+      setErrorMsg('Storage reference and receiving condition notes are required for custody intake (FR-11).')
+      return
     }
-    try {
-      await recordCustodyIntakeApi(staffId, activeCase.foundReportId, storageRef, conditionNotes);
-      setCases((prev) =>
-        prev.map((c) =>
-          c.foundReportId === activeCase.foundReportId
-            ? { ...c, custodyStatus: 'IN_CUSTODY', storageReference: storageRef }
-            : c
-        )
-      );
-      setStatusBanner(`Found Item #${activeCase.foundReportId} logged IN_CUSTODY at ${storageRef} in PostgreSQL.`);
-    } catch (err: unknown) {
-      setErrorMsg(`Backend Error: ${err instanceof Error ? err.message : 'Request failed.'}`);
+    const ok = await run(
+      () => claimsApi.recordCustodyIntake(activeCase.foundReportId, storageRef.trim(), conditionNotes.trim()),
+      `Found item #${activeCase.foundReportId} recorded IN_CUSTODY at ${storageRef.trim()}.`,
+      'Custody intake failed.',
+    )
+    if (ok) {
+      setStorageRef('')
+      setConditionNotes('')
     }
-  };
+  }
 
-  const handleDecision = async (action: 'APPROVE' | 'HOLD' | 'REJECT' | 'RECONSIDER') => {
-    setErrorMsg(null);
-    setStatusBanner(null);
+  async function handleResolveDispute(e: FormEvent) {
+    e.preventDefault()
+    if (!activeCase) return
+    if (!disputeResolution.trim()) {
+      setErrorMsg('Record how the dispute was resolved before clearing it (FR-12).')
+      return
+    }
+    const ok = await run(
+      () => claimsApi.resolveDispute(activeCase.foundReportId, disputeResolution.trim()),
+      `Dispute on found item #${activeCase.foundReportId} resolved. The item can be reserved again.`,
+      'The dispute was not resolved.',
+    )
+    if (ok) setDisputeResolution('')
+  }
 
+  async function handleDecision(action: DecisionAction) {
+    if (!activeCase) return
     if (!decisionReason.trim()) {
-      setErrorMsg('FR-12 Violation: You must record a clear reason for every review decision.');
-      return;
+      setErrorMsg('Record a clear reason for every review decision (FR-12).')
+      return
     }
-
-    if (staffId === activeCase.claimantId) {
-      setErrorMsg('T09 Violation: Self-review is blocked! Staff cannot review their own claim.');
-      return;
+    const ok = await run(
+      () => claimsApi.submitDecision(activeCase.claimId, action, decisionReason.trim(), physicalNotes.trim()),
+      `Claim #${activeCase.claimId} moved to ${NEXT_STATUS[action]}. The decision and reason were recorded.`,
+      'The decision was not recorded.',
+    )
+    if (ok) {
+      setDecisionReason('')
+      setPhysicalNotes('')
     }
+  }
 
-    if (action === 'APPROVE') {
-      if (activeCase.custodyStatus !== 'IN_CUSTODY') {
-        setErrorMsg('T09 Safeguard: Cannot approve claim before physical custody is confirmed (IN_CUSTODY required).');
-        return;
-      }
-      if (activeCase.doveSummary.hasCriticalConflict) {
-        setErrorMsg('T06 Safeguard: Unresolved critical identifier contradiction blocks approval.');
-        return;
-      }
+  async function handleEscalation(e: FormEvent) {
+    e.preventDefault()
+    if (!activeCase) return
+    if (!riskReason.trim()) {
+      setErrorMsg('A documented reason is required to change the risk tier (FR-10).')
+      return
     }
+    const ok = await run(
+      () => claimsApi.escalateRisk(activeCase.claimId, riskTier, riskReason.trim()),
+      `Claim #${activeCase.claimId} risk tier set to ${riskTier}.`,
+      'The risk tier was not changed.',
+    )
+    if (ok) setRiskReason('')
+  }
 
-    try {
-      await submitStaffDecisionApi(staffId, activeCase.claimId, action, decisionReason, physicalNotes);
-    } catch {
-      // Allows UI state update even if testing before seeding DB row
-    }
-
-    const nextStatusMap = {
-      APPROVE: 'APPROVED',
-      HOLD: 'ON_HOLD',
-      REJECT: 'REJECTED',
-      RECONSIDER: 'UNDER_REVIEW',
-    } as const;
-
-    setCases((prev) =>
-      prev.map((c) => {
-        if (c.claimId === activeCase.claimId) {
-          return {
-            ...c,
-            status: nextStatusMap[action],
-            custodyStatus: action === 'APPROVE' ? 'RESERVED' : c.custodyStatus,
-          };
-        }
-        if (action === 'APPROVE' && c.foundReportId === activeCase.foundReportId) {
-          return { ...c, custodyStatus: 'RESERVED' };
-        }
-        return c;
-      })
-    );
-
-    setStatusBanner(`Claim #${activeCase.claimId} transitioned to ${nextStatusMap[action]}. Audit record saved.`);
-    setDecisionReason('');
-  };
+  const blockers = activeCase ? approvalBlockers(activeCase) : []
+  const isClosed = activeCase ? CLOSED.includes(activeCase.status) : true
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 text-slate-900">
+    <div className="p-6 text-slate-900">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            FindBack - Claims, Custody & Staff Review (Member 3)
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight">Claims, custody &amp; staff review</h1>
           <p className="text-sm text-slate-600">
-            Requirements FR-06, FR-10, FR-11, FR-12, FR-18 | Single Active Reservation & Custody Safeguards
+            Cases you are involved in (as claimant, finder or competing claimant) are not shown to you.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-xs">
-            <label className="font-semibold text-slate-700 mr-2">Acting Staff ID:</label>
-            <input
-              type="number"
-              value={staffId}
-              onChange={(e) => setStaffId(Number(e.target.value))}
-              className="w-24 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-mono"
-            />
-          </div>
+        <div className="flex items-center gap-3 text-xs">
+          <span className="text-slate-600">Reviewing as <strong>{user?.name}</strong></span>
           <button
             type="button"
-            onClick={handleSeedDatabaseClaim}
-            className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+            onClick={refreshQueue}
+            disabled={busy}
+            className="rounded border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            + Seed Claim #1 in PostgreSQL
+            Refresh
           </button>
         </div>
       </header>
@@ -207,211 +177,297 @@ export const StaffReviewDashboard: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <section className="lg:col-span-4 space-y-3" aria-label="Claims Queue">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
-            Active Claims Queue ({cases.length})
-          </h2>
-          {cases.map((c) => (
-            <button
-              key={c.claimId}
-              onClick={() => setSelectedId(c.claimId)}
-              className={`w-full text-left rounded-lg border p-4 transition ${
-                c.claimId === selectedId
-                  ? 'border-blue-600 bg-blue-50/50 shadow-sm'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-900">
-                  Claim #{c.claimId} - {c.itemTitle}
-                </span>
-                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                  {c.status}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                <span>Claimant: #{c.claimantId}</span>
-                <span>|</span>
-                <span>Found ID: #{c.foundReportId}</span>
-                <span>|</span>
-                <span>Risk: <strong>{c.riskTier}</strong></span>
-                <span>|</span>
-                <span>Custody: <strong>{c.custodyStatus}</strong></span>
-              </div>
-            </button>
-          ))}
-        </section>
+      {loading ? (
+        <p className="text-sm text-slate-600">Loading the review queue…</p>
+      ) : !activeCase ? (
+        <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+          There are no claims waiting for your review.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <section className="space-y-3 lg:col-span-4" aria-label="Claims queue">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+              Review queue ({cases.length})
+            </h2>
+            {cases.map((c) => (
+              <button
+                key={c.claimId}
+                type="button"
+                onClick={() => setSelectedId(c.claimId)}
+                className={`w-full rounded-lg border p-4 text-left transition ${
+                  c.claimId === activeCase.claimId
+                    ? 'border-blue-600 bg-blue-50/50 shadow-sm'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900">Claim #{c.claimId} – {c.itemTitle}</span>
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{c.status}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                  <span>{c.claimantName}</span>
+                  <span>|</span>
+                  <span>Found #{c.foundReportId}</span>
+                  <span>|</span>
+                  <span>Risk: <strong>{c.riskTier}</strong></span>
+                  <span>|</span>
+                  <span>Custody: <strong>{c.custodyStatus}</strong></span>
+                  {c.competingActiveClaimsCount > 0 && (
+                    <span className="font-semibold text-amber-700">+{c.competingActiveClaimsCount} competing</span>
+                  )}
+                </div>
+              </button>
+            ))}
+          </section>
 
-        <section className="lg:col-span-8 space-y-6">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  1. Physical Custody & Reservation (Found Report #{activeCase.foundReportId})
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Zone: {activeCase.campusZone} | Category: {activeCase.category}
-                </p>
+          <section className="space-y-6 lg:col-span-8">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div>
+                  <h2 className="text-lg font-semibold">1. Physical custody (Found report #{activeCase.foundReportId})</h2>
+                  <p className="text-xs text-slate-500">
+                    Zone: {activeCase.campusZone} | Category: {activeCase.category} | Claimant: {activeCase.claimantName} (lost report #{activeCase.lostReportId})
+                  </p>
+                </div>
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-bold text-white">
+                  Custody: {activeCase.custodyStatus}
+                </span>
               </div>
-              <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-bold text-white">
-                Custody State: {activeCase.custodyStatus}
-              </span>
+
+              {activeCase.disputeBlocked && (
+                <form onSubmit={handleResolveDispute} className="mt-3 space-y-2 rounded border border-red-200 bg-red-50 p-3">
+                  <p className="text-xs font-medium text-red-800">
+                    This item is blocked by an unresolved dispute (an approved claim was put on hold). No claim can be
+                    approved until the dispute is resolved.
+                  </p>
+                  <label htmlFor="dispute-resolution" className="block text-xs font-semibold text-red-900">
+                    How was the dispute resolved? (recorded in the custody log) *
+                  </label>
+                  <textarea
+                    id="dispute-resolution"
+                    rows={2}
+                    value={disputeResolution}
+                    onChange={(e) => setDisputeResolution(e.target.value)}
+                    placeholder="e.g. Ownership re-confirmed with student ID; competing claimant withdrew"
+                    className="w-full rounded border border-red-200 bg-white px-3 py-1.5 text-sm"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="rounded bg-red-700 px-4 py-2 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                  >
+                    Resolve dispute
+                  </button>
+                </form>
+              )}
+
+              {activeCase.custodyStatus === 'REPORTED' ? (
+                <form onSubmit={handleCustodyConfirm} className="mt-4 space-y-3">
+                  <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs font-medium text-amber-700">
+                    The item is not yet in physical custody. Inspect and log it before any claim can be approved (FR-11).
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="storage-ref" className="block text-xs font-semibold text-slate-700">Storage / locker reference *</label>
+                      <input
+                        id="storage-ref"
+                        type="text"
+                        maxLength={100}
+                        value={storageRef}
+                        onChange={(e) => setStorageRef(e.target.value)}
+                        placeholder="e.g. SEC-LOCKER-B12"
+                        className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="condition-notes" className="block text-xs font-semibold text-slate-700">Receiving condition notes *</label>
+                      <input
+                        id="condition-notes"
+                        type="text"
+                        value={conditionNotes}
+                        onChange={(e) => setConditionNotes(e.target.value)}
+                        placeholder="Visible condition when received"
+                        className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="rounded bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    Confirm physical custody intake
+                  </button>
+                </form>
+              ) : (
+                <div className="mt-3 text-sm text-slate-700">
+                  <p><strong>Storage location:</strong> {activeCase.storageReference}</p>
+                  {activeCase.custodyStatus === 'RESERVED' ? (
+                    <p className="mt-1 text-xs text-blue-700">
+                      Reserved for approved claim #{activeCase.reservedByClaimId}. No other claim can be approved for this item.
+                    </p>
+                  ) : activeCase.custodyStatus === 'IN_CUSTODY' ? (
+                    <p className="mt-1 text-xs text-emerald-700">Physical custody confirmed. The item can be reserved by one approved claim.</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-slate-600">The item has been returned.</p>
+                  )}
+                </div>
+              )}
             </div>
 
-            {activeCase.custodyStatus === 'REPORTED' ? (
-              <form onSubmit={handleCustodyConfirm} className="mt-4 space-y-3">
-                <p className="text-xs font-medium text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">
-                  Item is not yet in physical custody. Staff must inspect and log the item before any claim can be approved (FR-12 / T09).
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <h2 className="text-lg font-semibold">2. DOVE summary &amp; risk tier</h2>
+                <span className="rounded bg-indigo-50 px-2.5 py-1 text-xs font-bold text-indigo-800">
+                  DOVE: {activeCase.doveSummary.strengthLabel}
+                </span>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-4 text-center sm:grid-cols-4">
+                <div className="rounded border border-emerald-200 bg-emerald-50 p-3">
+                  <div className="text-xl font-bold text-emerald-800">{activeCase.doveSummary.matchCount}</div>
+                  <div className="text-xs text-emerald-700">Distinct matches</div>
+                </div>
+                <div className="rounded border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-xl font-bold text-slate-700">{activeCase.doveSummary.unknownCount}</div>
+                  <div className="text-xs text-slate-600">Unknown / manual</div>
+                </div>
+                <div className="rounded border border-red-200 bg-red-50 p-3">
+                  <div className="text-xl font-bold text-red-800">{activeCase.doveSummary.contradictionCount}</div>
+                  <div className="text-xs text-red-700">Contradictions</div>
+                </div>
+                <div className="rounded border border-blue-200 bg-blue-50 p-3">
+                  <div className="text-xl font-bold text-blue-800">{activeCase.doveSummary.submissionsUsed} / 3</div>
+                  <div className="text-xs text-blue-700">Submissions used</div>
+                </div>
+              </div>
+              {activeCase.flagReason && (
+                <p className="mt-3 text-xs font-medium text-amber-800">Internal flag: {activeCase.flagReason}</p>
+              )}
+              <p className="mt-3 text-xs text-slate-600">
+                Compare the private evidence in the <Link className="font-semibold text-blue-700 underline" to="/evidence">Evidence Workspace</Link>.
+              </p>
+
+              <form onSubmit={handleEscalation} className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                <p className="text-sm">
+                  Current risk tier: <strong>{activeCase.riskTier}</strong>
+                  {activeCase.escalationReason && <span className="text-slate-600"> – {activeCase.escalationReason}</span>}
                 </p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Storage / Locker Reference *
-                    </label>
-                    <input
-                      type="text"
-                      value={storageRef}
-                      onChange={(e) => setStorageRef(e.target.value)}
-                      className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-                    />
+                    <label htmlFor="risk-tier" className="block text-xs font-semibold text-slate-700">New tier</label>
+                    <select
+                      id="risk-tier"
+                      value={riskTier}
+                      onChange={(e) => setRiskTier(e.target.value as RiskTier)}
+                      className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                    >
+                      <option value="LOW">LOW</option>
+                      <option value="MEDIUM">MEDIUM</option>
+                      <option value="HIGH">HIGH</option>
+                    </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Receiving Condition Notes *
-                    </label>
+                  <div className="sm:col-span-3">
+                    <label htmlFor="risk-reason" className="block text-xs font-semibold text-slate-700">Documented reason *</label>
                     <input
+                      id="risk-reason"
                       type="text"
-                      value={conditionNotes}
-                      onChange={(e) => setConditionNotes(e.target.value)}
+                      value={riskReason}
+                      onChange={(e) => setRiskReason(e.target.value)}
+                      placeholder="Why the review tier needs to change"
                       className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
                     />
                   </div>
                 </div>
                 <button
                   type="submit"
-                  className="rounded bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                  disabled={busy || isClosed}
+                  className="rounded bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  Confirm Physical Custody Intake
+                  Update risk tier
                 </button>
               </form>
-            ) : (
-              <div className="mt-3 text-sm text-slate-700">
-                <p>
-                  <strong>Storage Location:</strong> {activeCase.storageReference}
-                </p>
-                <p className="mt-1 text-xs text-emerald-700">
-                  Physical custody verified. Eligible for single active reservation upon claim approval.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="text-lg font-semibold">
-                2. DOVE Comparison Summary & Risk Assessment (FR-08, FR-10)
-              </h2>
-              <span className="rounded bg-indigo-50 px-2.5 py-1 text-xs font-bold text-indigo-800">
-                DOVE Label: {activeCase.doveSummary.strengthLabel}
-              </span>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4 text-center">
-              <div className="rounded border border-emerald-200 bg-emerald-50 p-3">
-                <div className="text-xl font-bold text-emerald-800">
-                  {activeCase.doveSummary.matchCount}
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="border-b border-slate-100 pb-3 text-lg font-semibold">3. Record review decision (FR-12)</h2>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label htmlFor="physical-notes" className="block text-xs font-semibold text-slate-700">Physical verification notes (optional)</label>
+                  <input
+                    id="physical-notes"
+                    type="text"
+                    value={physicalNotes}
+                    onChange={(e) => setPhysicalNotes(e.target.value)}
+                    className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+                    placeholder="What you checked on the physical item"
+                  />
                 </div>
-                <div className="text-xs text-emerald-700">Distinct Matches</div>
-              </div>
-              <div className="rounded border border-slate-200 bg-slate-50 p-3">
-                <div className="text-xl font-bold text-slate-700">
-                  {activeCase.doveSummary.unknownCount}
+                <div>
+                  <label htmlFor="decision-reason" className="block text-xs font-semibold text-slate-700">
+                    Decision reason (recorded in the audit trail) *
+                  </label>
+                  <textarea
+                    id="decision-reason"
+                    rows={2}
+                    value={decisionReason}
+                    onChange={(e) => setDecisionReason(e.target.value)}
+                    className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+                    placeholder="State clearly why this claim is being approved, held, rejected or reconsidered"
+                  />
                 </div>
-                <div className="text-xs text-slate-600">Unknown / Manual</div>
-              </div>
-              <div className="rounded border border-red-200 bg-red-50 p-3">
-                <div className="text-xl font-bold text-red-800">
-                  {activeCase.doveSummary.contradictionCount}
-                </div>
-                <div className="text-xs text-red-700">Contradictions</div>
-              </div>
-              <div className="rounded border border-blue-200 bg-blue-50 p-3">
-                <div className="text-xl font-bold text-blue-800">
-                  {activeCase.doveSummary.submissionsUsed} / 3
-                </div>
-                <div className="text-xs text-blue-700">Submissions Used</div>
-              </div>
-            </div>
-          </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold border-b border-slate-100 pb-3">
-              3. Record Official Review Decision (FR-12, FR-18)
-            </h2>
-            <div className="mt-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Physical Verification Notes (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={physicalNotes}
-                  onChange={(e) => setPhysicalNotes(e.target.value)}
-                  className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-                  placeholder="e.g., Verified serial suffix A82F inside charging case"
-                />
-              </div>
+                {activeCase.status === 'UNDER_REVIEW' && blockers.length > 0 && (
+                  <ul className="list-disc space-y-1 rounded border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800">
+                    {blockers.map((b) => <li key={b}>{b}</li>)}
+                  </ul>
+                )}
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Mandatory Decision Reason (Safe explanation recorded in audit trail) *
-                </label>
-                <textarea
-                  rows={2}
-                  value={decisionReason}
-                  onChange={(e) => setDecisionReason(e.target.value)}
-                  className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-                  placeholder="State clearly why this claim is being approved, held, rejected, or reconsidered..."
-                />
-              </div>
-
-              <div className="flex flex-wrap gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => handleDecision('APPROVE')}
-                  className="rounded bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700"
-                >
-                  Approve & Reserve Item
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDecision('HOLD')}
-                  className="rounded bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700"
-                >
-                  Place On Hold
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDecision('REJECT')}
-                  className="rounded bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700"
-                >
-                  Reject Claim
-                </button>
-                {(activeCase.status === 'ON_HOLD' || activeCase.status === 'REJECTED') && (
+                <div className="flex flex-wrap gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => handleDecision('RECONSIDER')}
-                    className="rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                    onClick={() => handleDecision('APPROVE')}
+                    disabled={busy || blockers.length > 0}
+                    className="rounded bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    Reconsider (Reopen to Under Review)
+                    Approve &amp; reserve item
                   </button>
-                )}
+                  {!isClosed && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleDecision('HOLD')}
+                        disabled={busy}
+                        className="rounded bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        Place on hold
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDecision('REJECT')}
+                        disabled={busy}
+                        className="rounded bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        Reject claim
+                      </button>
+                    </>
+                  )}
+                  {(activeCase.status === 'ON_HOLD' || activeCase.status === 'REJECTED') && (
+                    <button
+                      type="button"
+                      onClick={() => handleDecision('RECONSIDER')}
+                      disabled={busy}
+                      className="rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Reconsider (reopen for review)
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      )}
     </div>
-  );
-};
+  )
+}

@@ -1,102 +1,263 @@
-import React, { useState } from 'react';
-import { submitStudentClaimApi, withdrawStudentClaimApi } from './member3Api';
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { ApiRequestError, api } from '../../api/client'
+import type { CandidateMatch, ReportResponse } from '../../types/api'
+import { claimsApi, errorMessage } from './member3Api'
+import type { ClaimStatus, ClaimantClaim } from './member3Api'
 
-export const StudentClaimPortal: React.FC = () => {
-  const [studentId, setStudentId] = useState<number>(2012);
-  const [lostReportId, setLostReportId] = useState<number>(501);
-  const [foundReportId, setFoundReportId] = useState<number>(602);
-  
-  const [withdrawClaimId, setWithdrawClaimId] = useState<number | ''>('');
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const STATUS_LABEL: Record<ClaimStatus, string> = {
+  SUBMITTED: 'Submitted',
+  UNDER_REVIEW: 'Under staff review',
+  ON_HOLD: 'On hold – staff need more review',
+  APPROVED: 'Approved – collect at the Security Desk',
+  REJECTED: 'Not approved',
+  WITHDRAWN: 'Withdrawn',
+  COMPLETED: 'Returned to you',
+}
 
-  const handleSubmitClaim = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage(null);
-    setError(null);
+const STATUS_STYLE: Record<ClaimStatus, string> = {
+  SUBMITTED: 'bg-slate-100 text-slate-700',
+  UNDER_REVIEW: 'bg-blue-50 text-blue-800',
+  ON_HOLD: 'bg-amber-50 text-amber-800',
+  APPROVED: 'bg-emerald-50 text-emerald-800',
+  REJECTED: 'bg-red-50 text-red-800',
+  WITHDRAWN: 'bg-slate-100 text-slate-500',
+  COMPLETED: 'bg-emerald-50 text-emerald-800',
+}
+
+function describeReport(report: { category: string; colour: string; campusZone: string; brand?: string | null }) {
+  return [report.category, report.brand, report.colour, report.campusZone].filter(Boolean).join(' · ')
+}
+
+export function StudentClaimPortal() {
+  const [claims, setClaims] = useState<ClaimantClaim[]>([])
+  const [claimsLoading, setClaimsLoading] = useState(true)
+  const [claimsVersion, setClaimsVersion] = useState(0)
+  const [lostReports, setLostReports] = useState<ReportResponse[]>([])
+  const [reportsLoading, setReportsLoading] = useState(true)
+
+  const [lostReportId, setLostReportId] = useState<number | null>(null)
+  const [candidates, setCandidates] = useState<CandidateMatch[]>([])
+  const [candidatesLoading, setCandidatesLoading] = useState(false)
+  const [baselineRequired, setBaselineRequired] = useState(false)
+  const [foundReportId, setFoundReportId] = useState<number | null>(null)
+
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    claimsApi.myClaims()
+      .then((data) => { if (active) setClaims(data) })
+      .catch((cause: unknown) => { if (active) setError(errorMessage(cause, 'Could not load your claims.')) })
+      .finally(() => { if (active) setClaimsLoading(false) })
+    return () => { active = false }
+  }, [claimsVersion])
+
+  useEffect(() => {
+    let active = true
+    api.getMyReports()
+      .then((reports) => { if (active) setLostReports(reports.filter((r) => r.type === 'LOST' && r.status !== 'CLOSED')) })
+      .catch((cause: unknown) => { if (active) setError(errorMessage(cause, 'Could not load your reports.')) })
+      .finally(() => { if (active) setReportsLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    if (lostReportId === null) return
+    let active = true
+    api.getCandidates(lostReportId)
+      .then((matches) => { if (active) setCandidates(matches) })
+      .catch((cause: unknown) => {
+        if (!active) return
+        if (cause instanceof ApiRequestError && cause.status === 409) setBaselineRequired(true)
+        else setError(errorMessage(cause, 'Could not load candidate found reports.'))
+      })
+      .finally(() => { if (active) setCandidatesLoading(false) })
+    return () => { active = false }
+  }, [lostReportId])
+
+  const lostById = useMemo(() => new Map(lostReports.map((r) => [r.id, r])), [lostReports])
+
+  function chooseLostReport(value: string) {
+    const id = value ? Number(value) : null
+    setLostReportId(id)
+    setFoundReportId(null)
+    setCandidates([])
+    setBaselineRequired(false)
+    setCandidatesLoading(id !== null)
+  }
+
+  function reloadClaims() {
+    setClaimsVersion((v) => v + 1)
+  }
+
+  async function handleSubmitClaim(e: FormEvent) {
+    e.preventDefault()
+    if (lostReportId === null || foundReportId === null) return
+    setMessage(null)
+    setError(null)
+    setBusy(true)
     try {
-      const saved = await submitStudentClaimApi(studentId, lostReportId, foundReportId);
-      
-      // Look for 'id' first, fallback to 'claimId'
-      const actualId = saved.id || saved.claimId; 
-      
-      setMessage(`Success! Claim #${actualId} submitted. Status is now ${saved.status}.`);
-      setWithdrawClaimId(actualId); // This will now auto-fill correctly!
-      
-    } catch (err: unknown) {
-      setError((err instanceof Error ? err.message : '') || 'Failed to submit claim. Check active duplicate restrictions (FR-06).');
+      const saved = await claimsApi.submitClaim(lostReportId, foundReportId)
+      setMessage(`Claim #${saved.claimId} submitted. Status: ${STATUS_LABEL[saved.status]}.`)
+      setFoundReportId(null)
+      reloadClaims()
+    } catch (cause: unknown) {
+      setError(errorMessage(cause, 'Failed to submit claim.'))
+    } finally {
+      setBusy(false)
     }
-  };
+  }
 
-  const handleWithdraw = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage(null);
-    setError(null);
-    if (!withdrawClaimId) return;
+  async function handleWithdraw(claim: ClaimantClaim) {
+    if (!window.confirm(`Withdraw claim #${claim.claimId}? This cannot be undone.`)) return
+    setMessage(null)
+    setError(null)
+    setBusy(true)
     try {
-      await withdrawStudentClaimApi(Number(withdrawClaimId), studentId);
-      setMessage(`Success! Claim #${withdrawClaimId} was withdrawn (FR-18).`);
-      setWithdrawClaimId('');
-    } catch (err: unknown) {
-      setError((err instanceof Error ? err.message : '') || 'Failed to withdraw. It may already be approved or does not exist.');
+      await claimsApi.withdrawClaim(claim.claimId)
+      setMessage(`Claim #${claim.claimId} was withdrawn.`)
+      reloadClaims()
+    } catch (cause: unknown) {
+      setError(errorMessage(cause, 'Failed to withdraw the claim.'))
+    } finally {
+      setBusy(false)
     }
-  };
+  }
 
   return (
-    <div className="mx-auto max-w-4xl p-6 space-y-6">
+    <div className="mx-auto max-w-4xl space-y-6 p-6">
       <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-900">Student Claimant Portal (Module 3)</h2>
-        <p className="text-sm text-slate-600 mt-1">
-          Submit claims linked to a lost report and an independent found report (FR-06).
+        <h2 className="text-xl font-bold text-slate-900">Claim a found item</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Choose one of your lost reports, then the found report you believe is your item. Staff review every claim
+          and check the item physically before anything is released.
         </p>
 
         {message && (
-          <div className="mt-4 rounded bg-emerald-50 p-3 text-sm text-emerald-800 border border-emerald-200">
+          <div role="status" className="mt-4 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
             {message}
           </div>
         )}
         {error && (
-          <div className="mt-4 rounded bg-red-50 p-3 text-sm text-red-800 border border-red-200">
+          <div role="alert" className="mt-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
             {error}
           </div>
         )}
 
         <form onSubmit={handleSubmitClaim} className="mt-6 space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700">Student User ID *</label>
-              <input type="number" value={studentId} onChange={(e) => setStudentId(Number(e.target.value))} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700">Lost Report ID *</label>
-              <input type="number" value={lostReportId} onChange={(e) => setLostReportId(Number(e.target.value))} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700">Found Report ID *</label>
-              <input type="number" value={foundReportId} onChange={(e) => setFoundReportId(Number(e.target.value))} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-            </div>
+          <div>
+            <label htmlFor="claim-lost-report" className="block text-xs font-semibold text-slate-700">Your lost report *</label>
+            <select
+              id="claim-lost-report"
+              value={lostReportId ?? ''}
+              onChange={(e) => chooseLostReport(e.target.value)}
+              disabled={reportsLoading}
+              className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">{reportsLoading ? 'Loading your reports…' : 'Select a lost report'}</option>
+              {lostReports.map((r) => (
+                <option key={r.id} value={r.id}>#{r.id} – {describeReport(r)} ({r.eventDate})</option>
+              ))}
+            </select>
+            {!reportsLoading && lostReports.length === 0 && (
+              <p className="mt-2 text-xs text-slate-600">
+                You have no open lost reports. <Link className="font-semibold text-blue-700 underline" to="/report/lost">Report a lost item</Link> first.
+              </p>
+            )}
           </div>
-          <button type="submit" className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-            Submit Ownership Claim
+
+          {lostReportId !== null && (
+            <fieldset>
+              <legend className="block text-xs font-semibold text-slate-700">Found report you are claiming *</legend>
+              {candidatesLoading && <p className="mt-2 text-sm text-slate-600">Finding similar found reports…</p>}
+              {baselineRequired && (
+                <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                  Save your private baseline evidence in the <Link className="font-semibold underline" to="/evidence">Evidence Workspace</Link> before claiming.
+                </p>
+              )}
+              {!candidatesLoading && !baselineRequired && candidates.length === 0 && (
+                <p className="mt-2 text-sm text-slate-600">No matching found reports yet. Check back later.</p>
+              )}
+              <div className="mt-2 space-y-2">
+                {candidates.map((c) => (
+                  <label
+                    key={c.reportId}
+                    className={`flex cursor-pointer items-center justify-between gap-3 rounded border p-3 text-sm ${
+                      foundReportId === c.reportId ? 'border-blue-600 bg-blue-50/50' : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="found-report"
+                        value={c.reportId}
+                        checked={foundReportId === c.reportId}
+                        onChange={() => setFoundReportId(c.reportId)}
+                      />
+                      <span>Found report #{c.reportId} – {describeReport(c)}</span>
+                    </span>
+                    <span className="text-xs text-slate-500">{c.score.toFixed(1)} match score</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy || lostReportId === null || foundReportId === null}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Submit ownership claim
           </button>
         </form>
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900">Withdraw Active Claim (FR-18)</h3>
-        <p className="text-sm text-slate-600 mt-1">
-          Students can withdraw claims before they are approved by staff.
-        </p>
-        <form onSubmit={handleWithdraw} className="mt-4 flex items-end gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700">Claim ID to Withdraw</label>
-            <input type="number" value={withdrawClaimId} onChange={(e) => setWithdrawClaimId(Number(e.target.value))} className="mt-1 w-48 rounded border border-slate-300 px-3 py-2 text-sm" required />
-          </div>
-          <button type="submit" className="rounded bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700">
-            Withdraw Claim
-          </button>
-        </form>
+        <h3 className="text-lg font-bold text-slate-900">My claims</h3>
+        <p className="mt-1 text-sm text-slate-600">You can withdraw a claim until staff make a final decision on it.</p>
+        {claimsLoading ? (
+          <p className="mt-4 text-sm text-slate-600">Loading your claims…</p>
+        ) : claims.length === 0 ? (
+          <p className="mt-4 text-sm text-slate-600">You have not submitted any claims yet.</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-slate-100">
+            {claims.map((claim) => {
+              const lost = lostById.get(claim.lostReportId)
+              return (
+                <li key={claim.claimId} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Claim #{claim.claimId}</p>
+                    <p className="text-xs text-slate-600">
+                      Lost report #{claim.lostReportId}{lost ? ` (${describeReport(lost)})` : ''} → Found report #{claim.foundReportId}
+                    </p>
+                    <p className="text-xs text-slate-500">Submitted {new Date(claim.createdAt).toLocaleString()}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_STYLE[claim.status]}`}>
+                      {STATUS_LABEL[claim.status]}
+                    </span>
+                    {claim.withdrawable && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleWithdraw(claim)}
+                        className="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        Withdraw
+                      </button>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
     </div>
-  );
-};
+  )
+}

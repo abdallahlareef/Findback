@@ -7,11 +7,23 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import java.util.List;
 
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import static com.findback.module3.domain.ClaimStatus.*;
 
 @Service
 public class ClaimReviewService {
+
+    /** Claims that still count for FR-06 duplicate prevention and for competition over an item. */
+    public static final Set<ClaimStatus> ACTIVE = Collections.unmodifiableSet(EnumSet.of(SUBMITTED, UNDER_REVIEW, ON_HOLD, APPROVED));
+    /** A claimant may withdraw only while the claim is still waiting for a final staff decision (FR-18). */
+    public static final Set<ClaimStatus> WITHDRAWABLE = Collections.unmodifiableSet(EnumSet.of(SUBMITTED, UNDER_REVIEW, ON_HOLD));
+    /** Closed claims accept no further decisions; a REJECTED claim can only be reopened with RECONSIDER. */
+    public static final Set<ClaimStatus> CLOSED = Collections.unmodifiableSet(EnumSet.of(REJECTED, WITHDRAWN, COMPLETED));
+    private static final int STORAGE_REFERENCE_MAX_LENGTH = 100;
 
     private final ClaimRepository claimRepo;
     private final ItemCustodyStateRepository custodyStateRepo;
@@ -20,6 +32,7 @@ public class ClaimReviewService {
     private final ReportLookupPort reportPort;
     private final DoveEvaluationPort dovePort;
     private final OperationsPort opsPort;
+    private final ClaimantDirectoryPort directoryPort;
 
     public ClaimReviewService(ClaimRepository claimRepo,
                               ItemCustodyStateRepository custodyStateRepo,
@@ -27,7 +40,8 @@ public class ClaimReviewService {
                               CustodyEventRepository custodyEventRepo,
                               ReportLookupPort reportPort,
                               DoveEvaluationPort dovePort,
-                              OperationsPort opsPort) {
+                              OperationsPort opsPort,
+                              ClaimantDirectoryPort directoryPort) {
         this.claimRepo = claimRepo;
         this.custodyStateRepo = custodyStateRepo;
         this.reviewRepo = reviewRepo;
@@ -35,74 +49,185 @@ public class ClaimReviewService {
         this.reportPort = reportPort;
         this.dovePort = dovePort;
         this.opsPort = opsPort;
+        this.directoryPort = directoryPort;
     }
 
     public List<Claim> getAllClaims() {
         return claimRepo.findAll();
     }
 
-    @Transactional
-    public void withdrawClaim(Long claimId, Long studentId) {
-    Claim claim = claimRepo.findById(claimId)
-        .orElseThrow(() -> new RuntimeException("Claim not found"));
-        
-    if (!claim.getClaimantId().equals(studentId)) {
-        throw new RuntimeException("Unauthorized: You cannot withdraw someone else's claim.");
+    public List<Claim> getClaimsForClaimant(Long claimantId) {
+        return claimRepo.findByClaimantIdOrderByCreatedAtDesc(claimantId);
     }
-    if (claim.getStatus().name().equals("APPROVED")) {
-        throw new RuntimeException("Cannot withdraw a claim that has already been approved.");
-    }
-    
-    claim.setStatus(ClaimStatus.WITHDRAWN);
-    claimRepo.save(claim);
-}
 
+    /**
+     * Live review queue for one staff member. Cases the reviewer is involved in (as claimant,
+     * finder or competing claimant) are left out entirely so that their rivals' DOVE results and
+     * identities are never shown to them (T09).
+     */
+    @Transactional
+    public List<ReviewCaseView> getReviewQueue(Long staffId) {
+        List<Claim> claims = claimRepo.findAll();
+        Set<Long> itemsClaimedByReviewer = claims.stream()
+                .filter(c -> staffId.equals(c.getClaimantId()))
+                .map(Claim::getFoundReportId)
+                .collect(Collectors.toSet());
+        Map<Long, Long> activeClaimsPerItem = claims.stream()
+                .filter(c -> ACTIVE.contains(c.getStatus()))
+                .collect(Collectors.groupingBy(Claim::getFoundReportId, Collectors.counting()));
+        Map<Long, ItemCustodyState> custodyByItem = custodyStateRepo
+                .findAllById(claims.stream().map(Claim::getFoundReportId).distinct().toList()).stream()
+                .collect(Collectors.toMap(ItemCustodyState::getFoundReportId, Function.identity()));
+        Map<Long, ReportSummaryDto> foundReports = new HashMap<>();
+
+        List<ReviewCaseView> queue = new ArrayList<>();
+        for (Claim claim : claims) {
+            if (claim.getStatus() == WITHDRAWN || claim.getStatus() == COMPLETED) continue;
+            if (itemsClaimedByReviewer.contains(claim.getFoundReportId())) continue;
+            ReportSummaryDto found = foundReports.computeIfAbsent(claim.getFoundReportId(), reportPort::getReportById);
+            if (staffId.equals(found.authorId())) continue;
+
+            DoveSummaryDto dove = dovePort.evaluateOrGetSummary(claim.getClaimId(), claim.getLostReportId(), claim.getFoundReportId());
+            boolean pendingSupplement = dovePort.hasPendingSupplement(claim.getClaimId());
+            ItemCustodyState custody = custodyByItem.get(claim.getFoundReportId());
+            long competing = activeClaimsPerItem.getOrDefault(claim.getFoundReportId(), 0L)
+                    - (ACTIVE.contains(claim.getStatus()) ? 1 : 0);
+
+            queue.add(new ReviewCaseView(
+                    claim.getClaimId(), claim.getClaimantId(), directoryPort.displayName(claim.getClaimantId()),
+                    claim.getLostReportId(), claim.getFoundReportId(),
+                    found.title(), found.category(), found.zone(),
+                    claim.getStatus(), claim.getRiskTier(), claim.getEscalationReason(),
+                    claim.isInternalReviewFlag(), claim.getFlagReason(),
+                    custody == null ? CustodyStatus.REPORTED : custody.getCustodyStatus(),
+                    custody == null ? null : custody.getStorageReference(),
+                    custody != null && custody.isDisputeBlocked(),
+                    custody == null ? null : custody.getReservedByClaimId(),
+                    new ReviewCaseView.DoveView(dove.strengthLabel(), dove.matchCount(), dove.unknownCount(),
+                            dove.contradictionCount(), dove.hasCriticalIdentifierConflict(),
+                            dove.submissionAttemptsUsed(), pendingSupplement),
+                    Math.max(competing, 0L),
+                    claim.getCreatedAt(), claim.getUpdatedAt()));
+        }
+        queue.sort(Comparator.comparing(ReviewCaseView::claimId));
+        return queue;
+    }
+
+    /** FR-18: a claimant withdraws their own claim before any final staff decision. */
+    @Transactional
+    public Claim withdrawClaim(Long claimId, Long claimantId) {
+        Claim claim = findClaim(claimId);
+        if (!claim.getClaimantId().equals(claimantId)) {
+            throw error(HttpStatus.FORBIDDEN, "You can only withdraw your own claim.");
+        }
+        ClaimStatus previous = claim.getStatus();
+        if (!WITHDRAWABLE.contains(previous)) {
+            throw error(HttpStatus.CONFLICT, "Only claims still awaiting a staff decision can be withdrawn (current status: "
+                    + previous + ").");
+        }
+        claim.setStatus(WITHDRAWN);
+        claimRepo.save(claim);
+        opsPort.recordAuditEvent(claimantId, "CLAIM_WITHDRAWN", "CLAIM-" + claimId, previous + " -> " + WITHDRAWN);
+        return claim;
+    }
+
+    /** FR-11: staff record that a found item is physically held and where it is stored. */
     @Transactional
     public ItemCustodyState recordCustodyIntake(Long staffId, Long foundReportId,
                                                 String storageRef, String conditionNotes) {
-        ReportSummaryDto foundReport = reportPort.getReportById(foundReportId);
+        String storage = required(storageRef, "A storage or locker reference is required for custody intake (FR-11).");
+        if (storage.length() > STORAGE_REFERENCE_MAX_LENGTH) {
+            throw error(HttpStatus.BAD_REQUEST, "Storage reference must be at most " + STORAGE_REFERENCE_MAX_LENGTH + " characters.");
+        }
+        String condition = required(conditionNotes, "Receiving condition notes are required for custody intake (FR-11).");
+
+        // The found-report lock serializes intake with claim creation and with other intakes of the
+        // same item, including the very first intake when no custody row exists yet (T10).
+        ReportSummaryDto foundReport = reportPort.lockReportForUpdate(foundReportId);
         if (!"FOUND".equalsIgnoreCase(foundReport.type())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Custody applies only to FOUND reports.");
+            throw error(HttpStatus.BAD_REQUEST, "Custody applies only to FOUND reports.");
         }
-        if (foundReport.authorId().equals(staffId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Staff cannot intake their own found report.");
+        assertNotInvolved(staffId, null, foundReport, "FOUND-" + foundReportId);
+
+        Optional<ItemCustodyState> existing = custodyStateRepo.findByIdForUpdate(foundReportId);
+        if (existing.isPresent()) {
+            CustodyStatus current = existing.get().getCustodyStatus();
+            if (current == CustodyStatus.RESERVED) {
+                throw error(HttpStatus.CONFLICT, "This item is reserved for approved claim #" + existing.get().getReservedByClaimId()
+                        + ". Custody cannot be re-recorded until that reservation is released (T10).");
+            }
+            if (current == CustodyStatus.RETURNED) {
+                throw error(HttpStatus.CONFLICT, "This item has already been returned to its owner.");
+            }
         }
 
-        ItemCustodyState state = custodyStateRepo.findById(foundReportId)
-                .orElseGet(() -> {
-                    ItemCustodyState s = new ItemCustodyState();
-                    s.setFoundReportId(foundReportId);
-                    return s;
-                });
-
+        ItemCustodyState state = existing.orElseGet(() -> {
+            ItemCustodyState s = new ItemCustodyState();
+            s.setFoundReportId(foundReportId);
+            return s;
+        });
+        boolean firstIntake = state.getCustodyStatus() != CustodyStatus.IN_CUSTODY;
         state.setCustodyStatus(CustodyStatus.IN_CUSTODY);
-        state.setStorageReference(storageRef);
-        state.setReceivingOfficerId(staffId);
+        state.setStorageReference(storage);
+        if (firstIntake || state.getReceivingOfficerId() == null) {
+            state.setReceivingOfficerId(staffId);
+        }
         custodyStateRepo.save(state);
 
         custodyEventRepo.save(new CustodyEvent(foundReportId, staffId,
-                "RECEIVED_INTO_CUSTODY", storageRef, conditionNotes, true));
+                firstIntake ? "RECEIVED_INTO_CUSTODY" : "STORAGE_RECONFIRMED", storage, condition, true));
 
-        opsPort.recordAuditEvent(staffId, "CUSTODY_INTAKE", "FOUND-" + foundReportId, "IN_CUSTODY");
+        opsPort.recordAuditEvent(staffId, firstIntake ? "CUSTODY_INTAKE" : "CUSTODY_RECONFIRMED",
+                "FOUND-" + foundReportId, "IN_CUSTODY");
         return state;
     }
 
+    /**
+     * Clears the dispute block that is set when an approved claim is put on hold, so the item can be
+     * reserved again. Requires a recorded resolution and an uninvolved reviewer (FR-12, T09).
+     */
+    @Transactional
+    public ItemCustodyState resolveDispute(Long staffId, Long foundReportId, String resolution) {
+        String why = required(resolution, "A recorded resolution is required to clear a dispute (FR-12).");
+        ReportSummaryDto foundReport = reportPort.lockReportForUpdate(foundReportId);
+        assertNotInvolved(staffId, null, foundReport, "FOUND-" + foundReportId);
+
+        ItemCustodyState custody = custodyStateRepo.findByIdForUpdate(foundReportId)
+                .orElseThrow(() -> error(HttpStatus.NOT_FOUND, "No custody record exists for this item."));
+        if (!custody.isDisputeBlocked()) {
+            throw error(HttpStatus.CONFLICT, "This item is not blocked by a dispute.");
+        }
+        custody.setDisputeBlocked(false);
+        custodyStateRepo.save(custody);
+
+        custodyEventRepo.save(new CustodyEvent(foundReportId, staffId, "DISPUTE_RESOLVED",
+                Objects.requireNonNullElse(custody.getStorageReference(), "UNRECORDED"), why, true));
+        opsPort.recordAuditEvent(staffId, "DISPUTE_RESOLVED", "FOUND-" + foundReportId, "UNBLOCKED");
+        return custody;
+    }
+
+    /** FR-06: one active claim per claimant and found item. */
     @Transactional
     public Claim createClaim(Long claimantId, Long lostReportId, Long foundReportId) {
+        if (lostReportId == null || foundReportId == null) {
+            throw error(HttpStatus.BAD_REQUEST, "Choose your lost report and the found report you are claiming.");
+        }
         ReportSummaryDto lostReport = reportPort.getReportById(lostReportId);
-        ReportSummaryDto foundReport = reportPort.getReportById(foundReportId);
+        // Concurrent submissions for the same item (e.g. a double click) wait here, so the
+        // duplicate check below always sees claims committed by the other request (FR-06, T10).
+        ReportSummaryDto foundReport = reportPort.lockReportForUpdate(foundReportId);
 
         if (!"LOST".equals(lostReport.type()) || !"FOUND".equals(foundReport.type()) || foundReport.authorId().equals(claimantId)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A claim requires your lost report and another user's found report.");
+            throw error(HttpStatus.BAD_REQUEST, "A claim requires your lost report and another user's found report.");
         }
         if (!lostReport.authorId().equals(claimantId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You must own the lost report to submit a claim.");
+            throw error(HttpStatus.FORBIDDEN, "You must own the lost report to submit a claim.");
         }
         if (!lostReport.baselineEvidenceSaved()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Baseline private evidence is required first (FR-17).");
+            throw error(HttpStatus.BAD_REQUEST, "Baseline private evidence is required first (FR-17).");
         }
         if (claimRepo.existsActiveClaimForPair(claimantId, foundReportId)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "An active claim already exists for this item (FR-06).");
+            throw error(HttpStatus.CONFLICT, "An active claim already exists for this item (FR-06).");
         }
 
         Claim claim = new Claim();
@@ -110,12 +235,12 @@ public class ClaimReviewService {
         claim.setLostReportId(lostReportId);
         claim.setFoundReportId(foundReportId);
         claim.setRiskTier(RiskTier.fromCategory(foundReport.category()));
-        claim.setStatus(ClaimStatus.UNDER_REVIEW);
+        claim.setStatus(UNDER_REVIEW);
         claim = claimRepo.save(claim);
 
         DoveSummaryDto dove = dovePort.evaluateOrGetSummary(claim.getClaimId(), lostReportId, foundReportId);
         if (dove.hasCriticalIdentifierConflict()) {
-            claim.setStatus(ClaimStatus.ON_HOLD);
+            claim.setStatus(ON_HOLD);
             claim.setInternalReviewFlag(true);
             claim.setFlagReason("Critical identifier conflict detected by DOVE.");
             claimRepo.save(claim);
@@ -125,106 +250,143 @@ public class ClaimReviewService {
         return claim;
     }
 
+    /** FR-12: every decision needs a recorded reason; approval also reserves the item (T10). */
     @Transactional
     public Claim recordStaffDecision(Long reviewerId, Long claimId, String action,
                                      String reason, String physicalCheckNotes) {
-        if (reason == null || reason.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A recorded decision reason is mandatory (FR-12).");
-        }
+        String why = required(reason, "A recorded decision reason is mandatory (FR-12).");
+        String decision = action == null ? "" : action.trim().toUpperCase(Locale.ROOT);
 
-        Claim claim = claimRepo.findById(claimId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found."));
-
+        Claim claim = findClaim(claimId);
         ReportSummaryDto foundReport = reportPort.getReportById(claim.getFoundReportId());
-
-        if (reviewerId.equals(claim.getClaimantId()) || reviewerId.equals(foundReport.authorId())) {
-            opsPort.recordAuditEvent(reviewerId, "UNAUTHORIZED_SELF_REVIEW_ATTEMPT", "CLAIM-" + claimId, "DENIED");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Self-review of your own report or claim is prohibited.");
-        }
+        assertNotInvolved(reviewerId, claim, foundReport, "CLAIM-" + claimId);
 
         ClaimStatus prevStatus = claim.getStatus();
         ClaimStatus nextStatus;
 
-        switch (action.toUpperCase()) {
+        switch (decision) {
             case "APPROVE" -> {
+                if (prevStatus != UNDER_REVIEW) {
+                    throw error(HttpStatus.CONFLICT, "Only UNDER_REVIEW claims can be approved (current status: " + prevStatus + ").");
+                }
                 DoveSummaryDto currentDove = dovePort.evaluateOrGetSummary(claimId, claim.getLostReportId(), claim.getFoundReportId());
                 if (currentDove.hasCriticalIdentifierConflict() || dovePort.hasPendingSupplement(claimId)) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Resolve outstanding evidence review before approval.");
-                }
-                if (prevStatus != ClaimStatus.UNDER_REVIEW) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Only UNDER_REVIEW claims can be approved.");
+                    throw error(HttpStatus.CONFLICT, "Resolve outstanding evidence review before approval.");
                 }
                 ItemCustodyState custody = custodyStateRepo.findByIdForUpdate(claim.getFoundReportId())
-                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
-                                "Item custody not recorded yet. Confirm physical custody before approval (T09)."));
+                        .orElseThrow(() -> error(HttpStatus.CONFLICT,
+                                "Item custody not recorded yet. Confirm physical custody before approval (FR-11)."));
 
                 if (custody.getCustodyStatus() != CustodyStatus.IN_CUSTODY) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT,
-                            "Item is not available for reservation (Current state: " + custody.getCustodyStatus() + ").");
+                    throw error(HttpStatus.CONFLICT,
+                            "Item is not available for reservation (current state: " + custody.getCustodyStatus() + ").");
                 }
                 if (custody.isDisputeBlocked()) {
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Item is blocked by an unresolved dispute.");
+                    throw error(HttpStatus.CONFLICT, "Item is blocked by an unresolved dispute.");
                 }
 
                 custody.setCustodyStatus(CustodyStatus.RESERVED);
                 custody.setReservedByClaimId(claim.getClaimId());
                 custodyStateRepo.save(custody);
 
-                nextStatus = ClaimStatus.APPROVED;
+                nextStatus = APPROVED;
+                opsPort.issueHandoverCredential(claimId, claim.getClaimantId());
                 opsPort.sendSafeNotification(claim.getClaimantId(),
                         "Your claim #" + claimId + " has been approved. Present your handover code at the Security Desk.");
             }
             case "HOLD" -> {
-                if (prevStatus == ClaimStatus.APPROVED) {
+                assertOpen(prevStatus);
+                if (prevStatus == APPROVED) {
                     releaseReservationInternal(claim.getFoundReportId(), claim.getClaimId(), true);
-                    opsPort.revokeActiveHandoverCredential(claimId, "Claim placed On Hold by staff: " + reason);
+                    opsPort.revokeActiveHandoverCredential(claimId, "Claim placed On Hold by staff: " + why);
                 }
-                nextStatus = ClaimStatus.ON_HOLD;
+                nextStatus = ON_HOLD;
                 opsPort.sendSafeNotification(claim.getClaimantId(),
                         "Your claim #" + claimId + " requires additional review or information.");
             }
             case "REJECT" -> {
-                if (prevStatus == ClaimStatus.APPROVED) {
+                assertOpen(prevStatus);
+                if (prevStatus == APPROVED) {
                     releaseReservationInternal(claim.getFoundReportId(), claim.getClaimId(), false);
                     opsPort.revokeActiveHandoverCredential(claimId, "Approval revoked and claim rejected.");
                 }
-                nextStatus = ClaimStatus.REJECTED;
+                nextStatus = REJECTED;
                 opsPort.sendSafeNotification(claim.getClaimantId(),
                         "Your claim #" + claimId + " was not approved. You may request staff reconsideration if you have further proof.");
             }
             case "RECONSIDER" -> {
-                if (prevStatus != ClaimStatus.ON_HOLD && prevStatus != ClaimStatus.REJECTED) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only ON_HOLD or REJECTED claims can return to UNDER_REVIEW.");
+                if (prevStatus != ON_HOLD && prevStatus != REJECTED) {
+                    throw error(HttpStatus.BAD_REQUEST, "Only ON_HOLD or REJECTED claims can return to UNDER_REVIEW.");
                 }
-                nextStatus = ClaimStatus.UNDER_REVIEW;
+                nextStatus = UNDER_REVIEW;
                 opsPort.sendSafeNotification(claim.getClaimantId(), "Your claim #" + claimId + " has been reopened for staff review.");
             }
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported review decision: " + action);
+            default -> throw error(HttpStatus.BAD_REQUEST, "Unsupported review decision: " + action);
         }
 
         claim.setStatus(nextStatus);
         claimRepo.save(claim);
 
-        reviewRepo.save(new AdminReview(claimId, reviewerId, action.toUpperCase(),
-                prevStatus.name(), nextStatus.name(), reason, physicalCheckNotes));
+        reviewRepo.save(new AdminReview(claimId, reviewerId, decision,
+                prevStatus.name(), nextStatus.name(), why, physicalCheckNotes));
 
-        opsPort.recordAuditEvent(reviewerId, "CLAIM_DECISION_" + action.toUpperCase(),
+        opsPort.recordAuditEvent(reviewerId, "CLAIM_DECISION_" + decision,
                 "CLAIM-" + claimId, prevStatus + " -> " + nextStatus);
 
         return claim;
     }
 
+    /** FR-10: staff change a claim's risk tier with a documented reason. */
     @Transactional
     public Claim escalateRiskTier(Long staffId, Long claimId, RiskTier newTier, String reason) {
-        if (reason == null || reason.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Escalation reason is required (FR-10).");
+        String why = required(reason, "Escalation reason is required (FR-10).");
+        if (newTier == null) {
+            throw error(HttpStatus.BAD_REQUEST, "Choose a risk tier (LOW, MEDIUM or HIGH).");
         }
-        Claim claim = claimRepo.findById(claimId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Claim not found."));
+        Claim claim = findClaim(claimId);
+        assertNotInvolved(staffId, claim, reportPort.getReportById(claim.getFoundReportId()), "CLAIM-" + claimId);
+        if (CLOSED.contains(claim.getStatus())) {
+            throw error(HttpStatus.CONFLICT, "The risk tier of a closed claim cannot be changed (current status: "
+                    + claim.getStatus() + ").");
+        }
         claim.setRiskTier(newTier);
-        claim.setEscalationReason(reason);
+        claim.setEscalationReason(why);
         opsPort.recordAuditEvent(staffId, "RISK_ESCALATED", "CLAIM-" + claimId, newTier.name());
         return claimRepo.save(claim);
+    }
+
+    /**
+     * T09: a reviewer may not act on a case they are part of: as the claimant, as the finder who
+     * filed the found report, or as a claimant of any claim on the same found item.
+     */
+    private void assertNotInvolved(Long staffId, Claim claim, ReportSummaryDto foundReport, String caseRef) {
+        boolean involved = (claim != null && staffId.equals(claim.getClaimantId()))
+                || staffId.equals(foundReport.authorId())
+                || !claimRepo.findByClaimantIdAndFoundReportId(staffId, foundReport.reportId()).isEmpty();
+        if (involved) {
+            opsPort.recordAuditEvent(staffId, "UNAUTHORIZED_SELF_REVIEW_ATTEMPT", caseRef, "DENIED");
+            throw error(HttpStatus.FORBIDDEN, "You cannot review or act on a case you are involved in (T09).");
+        }
+    }
+
+    private static void assertOpen(ClaimStatus status) {
+        if (CLOSED.contains(status)) {
+            String hint = status == REJECTED ? " Use RECONSIDER to reopen it first." : "";
+            throw error(HttpStatus.CONFLICT, "This claim is already closed (status: " + status + ")." + hint);
+        }
+    }
+
+    private Claim findClaim(Long claimId) {
+        return claimRepo.findById(claimId).orElseThrow(() -> error(HttpStatus.NOT_FOUND, "Claim not found."));
+    }
+
+    private static String required(String value, String message) {
+        if (value == null || value.isBlank()) throw error(HttpStatus.BAD_REQUEST, message);
+        return value.trim();
+    }
+
+    private static ResponseStatusException error(HttpStatus status, String message) {
+        return new ResponseStatusException(status, message);
     }
 
     private void releaseReservationInternal(Long foundReportId, Long claimId, boolean flagDispute) {

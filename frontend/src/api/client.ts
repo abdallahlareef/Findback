@@ -11,6 +11,9 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
+const SERVER_UNREACHABLE =
+  'Cannot reach the FindBack server. Make sure the backend and its database are running, then try again.'
+
 export class ApiRequestError extends Error {
   readonly status: number
 
@@ -21,7 +24,16 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/** fetch() rejects only when the server cannot be reached at all (backend down, wrong URL, CORS). */
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch {
+    throw new ApiRequestError(0, SERVER_UNREACHABLE)
+  }
+}
+
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   const method = (init.method ?? 'GET').toUpperCase()
   if (init.body && !headers.has('Content-Type')) {
@@ -30,18 +42,22 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   headers.set('Accept', 'application/json')
 
   if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
-    const csrfResponse = await fetch(`${API_BASE}/api/auth/csrf`, {
+    const csrfResponse = await send(`${API_BASE}/api/auth/csrf`, {
       headers: { Accept: 'application/json' },
       credentials: 'include',
     })
     if (!csrfResponse.ok) {
-      throw new ApiRequestError(csrfResponse.status, 'Could not establish a secure session. Reload and try again.')
+      // The token endpoint is public and trivial, so a 5xx here almost always means the dev proxy
+      // could not reach the backend (Vite answers 500 when nothing is listening on port 8080).
+      throw new ApiRequestError(csrfResponse.status, csrfResponse.status >= 500
+        ? SERVER_UNREACHABLE
+        : 'Could not establish a secure session. Reload and try again.')
     }
     const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
     headers.set(csrf.headerName, csrf.token)
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await send(`${API_BASE}${path}`, {
     ...init,
     method,
     headers,

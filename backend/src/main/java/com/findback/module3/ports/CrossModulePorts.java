@@ -6,6 +6,13 @@ public interface CrossModulePorts {
 
     interface ReportLookupPort {
         ReportSummaryDto getReportById(Long reportId);
+
+        /**
+         * Same as {@link #getReportById(Long)} but also takes a row lock on the report that is held
+         * until the surrounding transaction ends. Claim creation and custody intake lock the found
+         * report this way so that concurrent writes for one item are serialized (FR-06, T10).
+         */
+        default ReportSummaryDto lockReportForUpdate(Long reportId) { return getReportById(reportId); }
     }
 
     record DoveSummaryDto(Long claimId, String strengthLabel,
@@ -17,9 +24,16 @@ public interface CrossModulePorts {
         default boolean hasPendingSupplement(Long claimId) { return false; }
     }
 
+    /** Staff-facing display name for a claimant; never used in claimant-facing responses. */
+    interface ClaimantDirectoryPort {
+        String displayName(Long userId);
+    }
+
+    /** Member 4 boundary: audit trail, notifications and one-time handover credentials. */
     interface OperationsPort {
         void recordAuditEvent(Long actorId, String action, String caseRef, String outcome);
         void sendSafeNotification(Long recipientUserId, String safeMessage);
+        void issueHandoverCredential(Long claimId, Long claimantId);
         void revokeActiveHandoverCredential(Long claimId, String reason);
     }
 }
