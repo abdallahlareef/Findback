@@ -2,7 +2,7 @@ package com.findback.module3.ports;
 
 public interface CrossModulePorts {
     record ReportSummaryDto(Long reportId, Long authorId, String type, String category,
-                            String title, String zone, boolean baselineEvidenceSaved) {}
+                            String title, String zone, boolean baselineEvidenceSaved, String riskLevel) {}
 
     interface ReportLookupPort {
         ReportSummaryDto getReportById(Long reportId);

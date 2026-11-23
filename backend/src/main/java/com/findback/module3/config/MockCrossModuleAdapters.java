@@ -16,10 +16,10 @@ public class MockCrossModuleAdapters {
         return reportId -> {
             if (reportId >= 600L) {
                 return new ReportSummaryDto(reportId, 99L, "FOUND", "EARBUDS",
-                        "Black JBL Tune Earbuds", "Main Library", true);
+                        "Black JBL Tune Earbuds", "Main Library", true, null);
             }
             return new ReportSummaryDto(reportId, 2012L, "LOST", "EARBUDS",
-                    "Black JBL Tune Earbuds", "Main Library", true);
+                    "Black JBL Tune Earbuds", "Main Library", true, null);
         };
     }
 

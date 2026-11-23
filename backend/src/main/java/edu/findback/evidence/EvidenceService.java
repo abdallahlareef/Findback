@@ -85,7 +85,7 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
     @Override public ReportSummaryDto getReportById(Long reportId) {
         Report r=report(reportId);
         return new ReportSummaryDto(r.getId(),r.getAuthor().getId(),r.getType().name(),r.getCategory(),
-            r.getCategory(),r.getCampusZone(),versions.existsByStreamKey(reportKey(reportId)));
+            r.getCategory(),r.getCampusZone(),versions.existsByStreamKey(reportKey(reportId)),r.getRiskLevel());
     }
     @Override public ReportSummaryDto lockReportForUpdate(Long reportId) { lockReport(reportId); return getReportById(reportId); }
     // The found-report row serializes all writes for a pair, including first creation.

@@ -208,6 +208,106 @@ class ClaimCustodyIntegrationTest {
     }
 
     @Test
+    void reportRiskLevelIsValidatedAndRaisesTheClaimTier_FR10() throws Exception {
+        String reportJson = "{\"type\":\"FOUND\",\"category\":\"Earbuds\",\"colour\":\"Black\",\"campusZone\":\"Library\","
+                + "\"eventDate\":\"" + LocalDate.now() + "\",\"riskLevel\":\"%s\"}";
+        perform(json(post("/api/reports"), reportJson.formatted("EXTREME")), finder).andExpect(status().isBadRequest());
+        perform(json(post("/api/reports"), reportJson.formatted("high")), finder).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.riskLevel").value("HIGH"));
+
+        // The finder marks the item HIGH; the owner's LOW choice cannot lower the claim's tier.
+        Report foundReport = reports.findById(found).orElseThrow();
+        foundReport.setRiskLevel("HIGH");
+        reports.save(foundReport);
+        Report lostReport = reports.findById(lost).orElseThrow();
+        lostReport.setRiskLevel("LOW");
+        reports.save(lostReport);
+
+        Long id = createClaim(owner, lost);
+        assertEquals(com.findback.module3.domain.RiskTier.HIGH, claims.findById(id).orElseThrow().getRiskTier());
+        perform(json(patch("/api/v1/claims/staff/claims/" + id + "/risk"), "{\"riskTier\":\"LOW\",\"reason\":\"Cheap item\"}"), staff)
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void rejectedClaimantRequestsReconsiderationInsteadOfANewClaim() throws Exception {
+        Long id = createClaim(owner, lost);
+        decide(staff, id, "REJECT").andExpect(status().isOk());
+
+        submit(owner, lost).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Request reconsideration")));
+        perform(get("/api/v1/claims/mine"), owner).andExpect(jsonPath("$[0].canRequestReconsideration").value(true));
+
+        String request = "{\"reason\":\"I found the box with serial A82F printed on it\"}";
+        String path = "/api/v1/claims/" + id + "/reconsideration";
+        perform(json(post(path), request), rival).andExpect(status().isForbidden());
+        perform(json(post(path), "{\"reason\":\" \"}"), owner).andExpect(status().isBadRequest());
+        perform(json(post(path), request), owner).andExpect(status().isOk())
+                .andExpect(jsonPath("$.reconsiderationStatus").value("PENDING"))
+                .andExpect(jsonPath("$.canRequestReconsideration").value(false));
+        perform(json(post(path), request), owner).andExpect(status().isConflict());
+
+        // Staff see the request at the top of their queue, with the claimant's message.
+        perform(get("/api/v1/claims/staff/cases"), otherStaff)
+                .andExpect(jsonPath("$[0].claimId").value(id))
+                .andExpect(jsonPath("$[0].reconsiderationPending").value(true))
+                .andExpect(jsonPath("$[0].reconsiderationReason").value(containsString("A82F")));
+
+        decide(staff, id, "RECONSIDER").andExpect(status().isOk());
+        perform(get("/api/v1/claims/mine"), owner)
+                .andExpect(jsonPath("$[0].status").value("UNDER_REVIEW"))
+                .andExpect(jsonPath("$[0].reconsiderationStatus").value("ACCEPTED"));
+    }
+
+    @Test
+    void staffCanDeclineAReconsiderationRequest() throws Exception {
+        Long id = createClaim(owner, lost);
+        decide(staff, id, "REJECT").andExpect(status().isOk());
+        decide(staff, id, "DECLINE_RECONSIDERATION").andExpect(status().isConflict());
+        perform(json(post("/api/v1/claims/" + id + "/reconsideration"), "{\"reason\":\"New receipt\"}"), owner).andExpect(status().isOk());
+
+        decide(staff, id, "DECLINE_RECONSIDERATION").andExpect(status().isOk());
+        perform(get("/api/v1/claims/mine"), owner)
+                .andExpect(jsonPath("$[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$[0].reconsiderationStatus").value("DECLINED"))
+                .andExpect(jsonPath("$[0].canRequestReconsideration").value(false));
+    }
+
+    @Test
+    void caseHistoryShowsWhoDidWhatAndWhy_FR12() throws Exception {
+        Long id = createClaim(owner, lost);
+        intake(staff).andExpect(status().isOk());
+        perform(json(patch("/api/v1/claims/staff/claims/" + id + "/risk"), "{\"riskTier\":\"HIGH\",\"reason\":\"Expensive model\"}"), staff)
+                .andExpect(status().isOk());
+        decide(staff, id, "APPROVE").andExpect(status().isOk());
+
+        String path = "/api/v1/claims/staff/claims/" + id + "/history";
+        perform(get(path), owner).andExpect(status().isForbidden());
+        perform(get(path), finder).andExpect(status().isForbidden());
+
+        String body = perform(get(path), otherStaff).andExpect(status().isOk())
+                .andExpect(jsonPath("$.claimantName").value("owner@claims.test"))
+                .andExpect(jsonPath("$.events[0].type").value("CLAIM_SUBMITTED"))
+                .andExpect(jsonPath("$.events[1].type").value("RECEIVED_INTO_CUSTODY"))
+                .andExpect(jsonPath("$.events[2].type").value("RISK_RAISED"))
+                .andExpect(jsonPath("$.events[2].details").value(containsString("MEDIUM -> HIGH: Expensive model")))
+                .andExpect(jsonPath("$.events[3].type").value("APPROVE"))
+                .andExpect(jsonPath("$.events[3].actorName").value("staff@claims.test"))
+                .andExpect(jsonPath("$.events[3].details").value("Recorded test decision"))
+                .andReturn().getResponse().getContentAsString();
+        assertFalse(body.contains("PRIVATE-"));
+
+        perform(get("/api/v1/claims/staff/history"), otherStaff).andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].claimId").value(id));
+        // A staff member who has their own claim on the item sees neither the list entry nor the timeline (T09).
+        Long staffLost = report(staff, ReportType.LOST);
+        baseline(staffLost, staff);
+        createClaim(staff, staffLost);
+        perform(get(path), staff).andExpect(status().isForbidden());
+        perform(get("/api/v1/claims/staff/history"), staff).andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
     void blockedApprovalExplainsWhy() throws Exception {
         Long id = createClaim(owner, lost);
         decide(staff, id, "APPROVE").andExpect(status().isConflict())

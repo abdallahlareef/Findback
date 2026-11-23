@@ -24,6 +24,11 @@ public class ClaimReviewService {
     /** Closed claims accept no further decisions; a REJECTED claim can only be reopened with RECONSIDER. */
     public static final Set<ClaimStatus> CLOSED = Collections.unmodifiableSet(EnumSet.of(REJECTED, WITHDRAWN, COMPLETED));
     private static final int STORAGE_REFERENCE_MAX_LENGTH = 100;
+    /** admin_review.reason, physical_check_result and custody_event.condition_notes are 255 characters. */
+    public static final int NOTE_MAX_LENGTH = 255;
+    /** Leaves room for the "MEDIUM -> HIGH: " prefix stored in the decision record. */
+    public static final int RISK_REASON_MAX_LENGTH = 200;
+    public static final int RECONSIDERATION_MAX_LENGTH = 1000;
 
     private final ClaimRepository claimRepo;
     private final ItemCustodyStateRepository custodyStateRepo;
@@ -112,9 +117,11 @@ public class ClaimReviewService {
                             dove.contradictionCount(), dove.hasCriticalIdentifierConflict(),
                             dove.submissionAttemptsUsed(), pendingSupplement),
                     Math.max(competing, 0L),
+                    claim.isReconsiderationPending(), claim.getReconsiderationReason(), claim.getReconsiderationRequestedAt(),
                     claim.getCreatedAt(), claim.getUpdatedAt()));
         }
-        queue.sort(Comparator.comparing(ReviewCaseView::claimId));
+        // Claimants' reconsideration requests first, so staff see the "message" straight away.
+        queue.sort(Comparator.comparing((ReviewCaseView c) -> !c.reconsiderationPending()).thenComparing(ReviewCaseView::claimId));
         return queue;
     }
 
@@ -134,6 +141,112 @@ public class ClaimReviewService {
         claimRepo.save(claim);
         opsPort.recordAuditEvent(claimantId, "CLAIM_WITHDRAWN", "CLAIM-" + claimId, previous + " -> " + WITHDRAWN);
         return claim;
+    }
+
+    /**
+     * A claimant asks staff to look again at a REJECTED claim because they have new proof. Allowed
+     * once per claim; it is the only way back after a rejection (a new claim for the same item is
+     * refused). Staff see the request flagged at the top of the review queue.
+     */
+    @Transactional
+    public Claim requestReconsideration(Long claimId, Long claimantId, String reason) {
+        String why = requiredText(reason, RECONSIDERATION_MAX_LENGTH,
+                "Explain what new proof you have so staff can decide whether to reopen the claim.");
+        Claim claim = findClaim(claimId);
+        if (!claim.getClaimantId().equals(claimantId)) {
+            throw error(HttpStatus.FORBIDDEN, "You can only request reconsideration of your own claim.");
+        }
+        if (claim.getStatus() != REJECTED) {
+            throw error(HttpStatus.CONFLICT, "Only rejected claims can be reconsidered (current status: " + claim.getStatus() + ").");
+        }
+        if (claim.getReconsiderationRequestedAt() != null) {
+            throw error(HttpStatus.CONFLICT, "You have already requested reconsideration for this claim.");
+        }
+        if (itemReturned(claim.getFoundReportId())) {
+            throw error(HttpStatus.CONFLICT, "This item has already been returned to its verified owner.");
+        }
+        claim.requestReconsideration(why);
+        claimRepo.save(claim);
+        opsPort.recordAuditEvent(claimantId, "RECONSIDERATION_REQUESTED", "CLAIM-" + claimId, "PENDING");
+        return claim;
+    }
+
+    /** Whether the claimant may still ask for reconsideration (shown as a button in their claim list). */
+    public boolean reconsiderationAvailable(Claim claim) {
+        return claim.getStatus() == REJECTED
+                && claim.getReconsiderationRequestedAt() == null
+                && !itemReturned(claim.getFoundReportId());
+    }
+
+    private boolean itemReturned(Long foundReportId) {
+        return custodyStateRepo.findById(foundReportId)
+                .map(s -> s.getCustodyStatus() == CustodyStatus.RETURNED)
+                .orElse(false);
+    }
+
+    /** Case-history search list: every claim except those the reviewer is involved in (T09). */
+    @Transactional(readOnly = true)
+    public List<CaseHistoryView.CaseSummary> getHistoryCases(Long staffId) {
+        List<Claim> claims = claimRepo.findAll();
+        Set<Long> itemsClaimedByReviewer = claims.stream()
+                .filter(c -> staffId.equals(c.getClaimantId()))
+                .map(Claim::getFoundReportId)
+                .collect(Collectors.toSet());
+        Map<Long, ReportSummaryDto> foundReports = new HashMap<>();
+        List<CaseHistoryView.CaseSummary> result = new ArrayList<>();
+        for (Claim claim : claims) {
+            if (itemsClaimedByReviewer.contains(claim.getFoundReportId())) continue;
+            ReportSummaryDto found = foundReports.computeIfAbsent(claim.getFoundReportId(), reportPort::getReportById);
+            if (staffId.equals(found.authorId())) continue;
+            result.add(new CaseHistoryView.CaseSummary(claim.getClaimId(), directoryPort.displayName(claim.getClaimantId()),
+                    claim.getFoundReportId(), found.title(), claim.getStatus(), claim.getRiskTier(),
+                    claim.getCreatedAt(), claim.getUpdatedAt()));
+        }
+        result.sort(Comparator.comparing(CaseHistoryView.CaseSummary::updatedAt).reversed());
+        return result;
+    }
+
+    /** FR-12 audit view: who did what to this claim and its item, when, and why. */
+    @Transactional(readOnly = true)
+    public CaseHistoryView getCaseHistory(Long staffId, Long claimId) {
+        Claim claim = findClaim(claimId);
+        ReportSummaryDto found = reportPort.getReportById(claim.getFoundReportId());
+        assertNotInvolved(staffId, claim, found, "CLAIM-" + claimId);
+
+        Map<Long, String> names = new HashMap<>();
+        Function<Long, String> name = id -> id == null ? "System" : names.computeIfAbsent(id, directoryPort::displayName);
+        String claimantName = name.apply(claim.getClaimantId());
+
+        List<CaseHistoryView.Event> events = new ArrayList<>();
+        events.add(new CaseHistoryView.Event(claim.getCreatedAt(), "CLAIM", "CLAIM_SUBMITTED", claimantName,
+                "Claim submitted for found item #" + claim.getFoundReportId(), null));
+        for (AdminReview review : reviewRepo.findByClaimIdOrderByReviewedAtDesc(claimId)) {
+            String change = review.getPreviousStatus().equals(review.getNewStatus())
+                    ? "Status unchanged (" + review.getNewStatus() + ")"
+                    : review.getPreviousStatus() + " → " + review.getNewStatus();
+            String details = review.getPhysicalCheckResult() == null || review.getPhysicalCheckResult().isBlank()
+                    ? review.getReason()
+                    : review.getReason() + " | Physical check: " + review.getPhysicalCheckResult();
+            events.add(new CaseHistoryView.Event(review.getReviewedAt(), "DECISION", review.getDecision(),
+                    name.apply(review.getReviewerId()), change, details));
+        }
+        for (CustodyEvent event : custodyEventRepo.findByFoundReportIdOrderByRecordedAtDesc(claim.getFoundReportId())) {
+            events.add(new CaseHistoryView.Event(event.getRecordedAt(), "CUSTODY", event.getEventType(),
+                    name.apply(event.getStaffId()), "Item #" + event.getFoundReportId() + " · storage " + event.getStorageReference(),
+                    event.getConditionNotes()));
+        }
+        if (claim.getReconsiderationRequestedAt() != null) {
+            events.add(new CaseHistoryView.Event(claim.getReconsiderationRequestedAt(), "CLAIM", "RECONSIDERATION_REQUESTED",
+                    claimantName, "Claimant asked staff to reconsider", claim.getReconsiderationReason()));
+        }
+        if (claim.getStatus() == WITHDRAWN) {
+            events.add(new CaseHistoryView.Event(claim.getUpdatedAt(), "CLAIM", "CLAIM_WITHDRAWN", claimantName,
+                    "Claim withdrawn by the claimant", null));
+        }
+        events.sort(Comparator.comparing(CaseHistoryView.Event::at));
+
+        return new CaseHistoryView(claim.getClaimId(), claim.getClaimantId(), claimantName, claim.getLostReportId(),
+                claim.getFoundReportId(), found.title(), claim.getStatus(), claim.getRiskTier(), events);
     }
 
     /** FR-11: staff record that a found item is physically held and where it is stored. */
@@ -234,12 +347,21 @@ public class ClaimReviewService {
         if (claimRepo.existsActiveClaimForPair(claimantId, foundReportId)) {
             throw error(HttpStatus.CONFLICT, "An active claim already exists for this item (FR-06).");
         }
+        boolean rejectedBefore = claimRepo.findByClaimantIdAndFoundReportId(claimantId, foundReportId).stream()
+                .anyMatch(c -> c.getStatus() == REJECTED);
+        if (rejectedBefore) {
+            throw error(HttpStatus.CONFLICT, "Your earlier claim for this item was not approved. Open it under My claims "
+                    + "and use Request reconsideration instead of submitting a new claim.");
+        }
 
         Claim claim = new Claim();
         claim.setClaimantId(claimantId);
         claim.setLostReportId(lostReportId);
         claim.setFoundReportId(foundReportId);
-        claim.setRiskTier(RiskTier.fromCategory(foundReport.category()));
+        // FR-10: neither party can lower the tier below what either report or either category implies.
+        claim.setRiskTier(RiskTier.highest(
+                RiskTier.fromCategory(foundReport.category()), RiskTier.fromCategory(lostReport.category()),
+                RiskTier.parse(foundReport.riskLevel()), RiskTier.parse(lostReport.riskLevel())));
         claim.setStatus(UNDER_REVIEW);
         claim = claimRepo.save(claim);
 
@@ -260,6 +382,7 @@ public class ClaimReviewService {
     public Claim recordStaffDecision(Long reviewerId, Long claimId, String action,
                                      String reason, String physicalCheckNotes) {
         String why = required(reason, "A recorded decision reason is mandatory (FR-12).");
+        String physicalNotes = optionalText(physicalCheckNotes, NOTE_MAX_LENGTH);
         String decision = action == null ? "" : action.trim().toUpperCase(Locale.ROOT);
 
         Claim claim = findClaim(claimId);
@@ -323,8 +446,23 @@ public class ClaimReviewService {
                 if (prevStatus != ON_HOLD && prevStatus != REJECTED) {
                     throw error(HttpStatus.BAD_REQUEST, "Only ON_HOLD or REJECTED claims can return to UNDER_REVIEW.");
                 }
+                if (itemReturned(claim.getFoundReportId())) {
+                    throw error(HttpStatus.CONFLICT, "This item has already been returned to its verified owner.");
+                }
+                if (claim.isReconsiderationPending()) {
+                    claim.resolveReconsideration("ACCEPTED");
+                }
                 nextStatus = UNDER_REVIEW;
                 opsPort.sendSafeNotification(claim.getClaimantId(), "Your claim #" + claimId + " has been reopened for staff review.");
+            }
+            case "DECLINE_RECONSIDERATION" -> {
+                if (prevStatus != REJECTED || !claim.isReconsiderationPending()) {
+                    throw error(HttpStatus.CONFLICT, "There is no pending reconsideration request on this claim.");
+                }
+                claim.resolveReconsideration("DECLINED");
+                nextStatus = REJECTED;
+                opsPort.sendSafeNotification(claim.getClaimantId(), "Staff reviewed your reconsideration request for claim #"
+                        + claimId + ". The original decision stands.");
             }
             default -> throw error(HttpStatus.BAD_REQUEST, "Unsupported review decision: " + action);
         }
@@ -333,7 +471,7 @@ public class ClaimReviewService {
         claimRepo.save(claim);
 
         reviewRepo.save(new AdminReview(claimId, reviewerId, decision,
-                prevStatus.name(), nextStatus.name(), why, physicalCheckNotes));
+                prevStatus.name(), nextStatus.name(), why, physicalNotes));
 
         opsPort.recordAuditEvent(reviewerId, "CLAIM_DECISION_" + decision,
                 "CLAIM-" + claimId, prevStatus + " -> " + nextStatus);
@@ -403,7 +541,7 @@ public class ClaimReviewService {
     /** FR-10: staff change a claim's risk tier with a documented reason. */
     @Transactional
     public Claim escalateRiskTier(Long staffId, Long claimId, RiskTier newTier, String reason) {
-        String why = required(reason, "Escalation reason is required (FR-10).");
+        String why = requiredText(reason, RISK_REASON_MAX_LENGTH, "Escalation reason is required (FR-10).");
         if (newTier == null) {
             throw error(HttpStatus.BAD_REQUEST, "Choose a risk tier (LOW, MEDIUM or HIGH).");
         }
@@ -413,9 +551,16 @@ public class ClaimReviewService {
             throw error(HttpStatus.CONFLICT, "The risk tier of a closed claim cannot be changed (current status: "
                     + claim.getStatus() + ").");
         }
+        RiskTier previous = claim.getRiskTier();
+        // Raise-only: lowering a tier would let a claim skip the checks its item category requires.
+        if (newTier.compareTo(previous) <= 0) {
+            throw error(HttpStatus.CONFLICT, "The risk tier can only be raised (currently " + previous + ").");
+        }
         claim.setRiskTier(newTier);
         claim.setEscalationReason(why);
-        opsPort.recordAuditEvent(staffId, "RISK_ESCALATED", "CLAIM-" + claimId, newTier.name());
+        reviewRepo.save(new AdminReview(claimId, staffId, "RISK_RAISED", claim.getStatus().name(), claim.getStatus().name(),
+                previous + " -> " + newTier + ": " + why, null));
+        opsPort.recordAuditEvent(staffId, "RISK_ESCALATED", "CLAIM-" + claimId, previous + " -> " + newTier);
         return claimRepo.save(claim);
     }
 
@@ -445,8 +590,21 @@ public class ClaimReviewService {
     }
 
     private static String required(String value, String message) {
+        return requiredText(value, NOTE_MAX_LENGTH, message);
+    }
+
+    private static String requiredText(String value, int maxLength, String message) {
         if (value == null || value.isBlank()) throw error(HttpStatus.BAD_REQUEST, message);
-        return value.trim();
+        String text = value.trim();
+        if (text.length() > maxLength) {
+            throw error(HttpStatus.BAD_REQUEST, "Text must be at most " + maxLength + " characters (got " + text.length() + ").");
+        }
+        return text;
+    }
+
+    private static String optionalText(String value, int maxLength) {
+        if (value == null || value.isBlank()) return null;
+        return requiredText(value, maxLength, "");
     }
 
     private static ResponseStatusException error(HttpStatus status, String message) {

@@ -2,6 +2,7 @@ package edu.findback.report;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
@@ -38,7 +39,16 @@ public record CreateReportRequest(
         LocalTime timeTo,
 
         @Size(max = 500)
-        String safeDescription
+        String safeDescription,
+
+        @Pattern(regexp = "(?i)LOW|MEDIUM|HIGH", message = "Risk level must be LOW, MEDIUM or HIGH")
+        String riskLevel
 
 ) {
+    /** Kept for callers that predate the risk level field. */
+    public CreateReportRequest(ReportType type, String category, String brand, String model, String colour,
+                               String campusZone, LocalDate eventDate, LocalTime timeFrom, LocalTime timeTo,
+                               String safeDescription) {
+        this(type, category, brand, model, colour, campusZone, eventDate, timeFrom, timeTo, safeDescription, null);
+    }
 }

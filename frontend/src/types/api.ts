@@ -25,6 +25,8 @@ export interface ReportPayload {
   timeFrom?: string
   timeTo?: string
   safeDescription?: string
+  /** FR-10 item risk chosen by the reporter (required on the form). */
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH'
 }
 
 export interface ReportResponse extends ReportPayload {

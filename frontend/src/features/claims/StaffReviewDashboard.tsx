@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { claimsApi, errorMessage } from './member3Api'
+import { NOTE_MAX_LENGTH, RISK_REASON_MAX_LENGTH, claimsApi, errorMessage } from './member3Api'
 import type { ClaimStatus, DecisionAction, RiskTier, StaffClaimCaseView } from './member3Api'
+import { RISK_LEVELS, riskRank } from './riskLevels'
 
 const CLOSED: ClaimStatus[] = ['REJECTED', 'WITHDRAWN', 'COMPLETED']
 
@@ -12,6 +13,7 @@ const NEXT_STATUS: Record<DecisionAction, ClaimStatus> = {
   HOLD: 'ON_HOLD',
   REJECT: 'REJECTED',
   RECONSIDER: 'UNDER_REVIEW',
+  DECLINE_RECONSIDERATION: 'REJECTED',
 }
 
 /** UI hints only. The server re-checks every rule and its answer is what counts. */
@@ -154,9 +156,10 @@ export function StaffReviewDashboard() {
       setErrorMsg('A documented reason is required to change the risk tier (FR-10).')
       return
     }
+    if (!selectedTier) return
     const ok = await run(
-      () => claimsApi.escalateRisk(activeCase.claimId, riskTier, riskReason.trim()),
-      `Claim #${activeCase.claimId} risk tier set to ${riskTier}.`,
+      () => claimsApi.escalateRisk(activeCase.claimId, selectedTier, riskReason.trim()),
+      `Claim #${activeCase.claimId} risk tier raised to ${selectedTier}.`,
       'The risk tier was not changed.',
     )
     if (ok) setRiskReason('')
@@ -164,6 +167,13 @@ export function StaffReviewDashboard() {
 
   const blockers = activeCase ? approvalBlockers(activeCase) : []
   const isClosed = activeCase ? CLOSED.includes(activeCase.status) : true
+  const pendingReconsiderations = cases.filter((c) => c.reconsiderationPending).length
+  // Tiers can only be raised (server-enforced); offer just the levels above the current one.
+  const higherTiers: RiskTier[] = activeCase
+    ? (['MEDIUM', 'HIGH'] as RiskTier[]).filter((t) => riskRank(t) > riskRank(activeCase.riskTier))
+    : []
+  const selectedTier: RiskTier | undefined = higherTiers.includes(riskTier) ? riskTier : higherTiers[higherTiers.length - 1]
+  const tierPolicy = activeCase ? RISK_LEVELS.find((l) => l.value === activeCase.riskTier)?.policy : undefined
 
   return (
     <div className="p-6 text-slate-900">
@@ -195,6 +205,12 @@ export function StaffReviewDashboard() {
       {statusBanner && (
         <div role="status" className="mb-4 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
           {statusBanner}
+        </div>
+      )}
+      {pendingReconsiderations > 0 && (
+        <div className="mb-4 rounded-md border border-blue-300 bg-blue-50 p-3 text-sm font-medium text-blue-900">
+          {pendingReconsiderations === 1 ? '1 claimant has' : `${pendingReconsiderations} claimants have`} asked for a
+          rejected claim to be reconsidered. These cases are at the top of the queue.
         </div>
       )}
 
@@ -237,6 +253,11 @@ export function StaffReviewDashboard() {
                     <span className="font-semibold text-amber-700">+{c.competingActiveClaimsCount} competing</span>
                   )}
                 </div>
+                {c.reconsiderationPending && (
+                  <span className="mt-2 inline-block rounded bg-blue-600 px-2 py-0.5 text-xs font-semibold text-white">
+                    Reconsideration requested
+                  </span>
+                )}
               </button>
             ))}
           </section>
@@ -249,6 +270,9 @@ export function StaffReviewDashboard() {
                   <p className="text-xs text-slate-500">
                     Zone: {activeCase.campusZone} | Category: {activeCase.category} | Claimant: {activeCase.claimantName} (lost report #{activeCase.lostReportId})
                   </p>
+                  <Link to={`/admin/history/${activeCase.claimId}`} className="text-xs font-semibold text-blue-700 underline">
+                    View case history
+                  </Link>
                 </div>
                 <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-bold text-white">
                   Custody: {activeCase.custodyStatus}
@@ -267,6 +291,7 @@ export function StaffReviewDashboard() {
                   <textarea
                     id="dispute-resolution"
                     rows={2}
+                    maxLength={NOTE_MAX_LENGTH}
                     value={disputeResolution}
                     onChange={(e) => setDisputeResolution(e.target.value)}
                     placeholder="e.g. Ownership re-confirmed with student ID; competing claimant withdrew"
@@ -305,6 +330,7 @@ export function StaffReviewDashboard() {
                       <input
                         id="condition-notes"
                         type="text"
+                        maxLength={NOTE_MAX_LENGTH}
                         value={conditionNotes}
                         onChange={(e) => setConditionNotes(e.target.value)}
                         placeholder="Visible condition when received"
@@ -349,6 +375,7 @@ export function StaffReviewDashboard() {
                               <input
                                 id="identity-notes"
                                 type="text"
+                                maxLength={NOTE_MAX_LENGTH}
                                 value={identityNotes}
                                 onChange={(e) => setIdentityNotes(e.target.value)}
                                 placeholder="e.g. Student ID card matched account name"
@@ -413,39 +440,46 @@ export function StaffReviewDashboard() {
                   Current risk tier: <strong>{activeCase.riskTier}</strong>
                   {activeCase.escalationReason && <span className="text-slate-600"> – {activeCase.escalationReason}</span>}
                 </p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                  <div>
-                    <label htmlFor="risk-tier" className="block text-xs font-semibold text-slate-700">New tier</label>
-                    <select
-                      id="risk-tier"
-                      value={riskTier}
-                      onChange={(e) => setRiskTier(e.target.value as RiskTier)}
-                      className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                {tierPolicy && <p className="text-xs text-slate-600">Policy for this tier: {tierPolicy}</p>}
+                {higherTiers.length === 0 ? (
+                  <p className="text-xs text-slate-500">This claim is already at the highest risk tier.</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                      <div>
+                        <label htmlFor="risk-tier" className="block text-xs font-semibold text-slate-700">Raise to</label>
+                        <select
+                          id="risk-tier"
+                          value={selectedTier}
+                          onChange={(e) => setRiskTier(e.target.value as RiskTier)}
+                          className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                        >
+                          {higherTiers.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="sm:col-span-3">
+                        <label htmlFor="risk-reason" className="block text-xs font-semibold text-slate-700">Documented reason *</label>
+                        <input
+                          id="risk-reason"
+                          type="text"
+                          maxLength={RISK_REASON_MAX_LENGTH}
+                          value={riskReason}
+                          onChange={(e) => setRiskReason(e.target.value)}
+                          placeholder="Why this claim needs stricter review"
+                          className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-500">Risk tiers can only be raised, never lowered.</p>
+                    <button
+                      type="submit"
+                      disabled={busy || isClosed}
+                      className="rounded bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      <option value="LOW">LOW</option>
-                      <option value="MEDIUM">MEDIUM</option>
-                      <option value="HIGH">HIGH</option>
-                    </select>
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label htmlFor="risk-reason" className="block text-xs font-semibold text-slate-700">Documented reason *</label>
-                    <input
-                      id="risk-reason"
-                      type="text"
-                      value={riskReason}
-                      onChange={(e) => setRiskReason(e.target.value)}
-                      placeholder="Why the review tier needs to change"
-                      className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
-                    />
-                  </div>
-                </div>
-                <button
-                  type="submit"
-                  disabled={busy || isClosed}
-                  className="rounded bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  Update risk tier
-                </button>
+                      Raise risk tier
+                    </button>
+                  </>
+                )}
               </form>
             </div>
 
@@ -457,6 +491,7 @@ export function StaffReviewDashboard() {
                   <input
                     id="physical-notes"
                     type="text"
+                    maxLength={NOTE_MAX_LENGTH}
                     value={physicalNotes}
                     onChange={(e) => setPhysicalNotes(e.target.value)}
                     className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
@@ -470,12 +505,24 @@ export function StaffReviewDashboard() {
                   <textarea
                     id="decision-reason"
                     rows={2}
+                    maxLength={NOTE_MAX_LENGTH}
                     value={decisionReason}
                     onChange={(e) => setDecisionReason(e.target.value)}
                     className="mt-1 w-full rounded border border-slate-300 px-3 py-1.5 text-sm"
                     placeholder="State clearly why this claim is being approved, held, rejected or reconsidered"
                   />
                 </div>
+
+                {activeCase.reconsiderationPending && (
+                  <div className="rounded border border-blue-300 bg-blue-50 p-3 text-sm text-blue-900">
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Reconsideration requested by {activeCase.claimantName}
+                      {activeCase.reconsiderationRequestedAt && ` · ${new Date(activeCase.reconsiderationRequestedAt).toLocaleString()}`}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap">{activeCase.reconsiderationReason}</p>
+                    <p className="mt-2 text-xs">Reopen the claim to review it again, or decline the request with a reason (final).</p>
+                  </div>
+                )}
 
                 {activeCase.status === 'UNDER_REVIEW' && blockers.length > 0 && (
                   <ul className="list-disc space-y-1 rounded border border-amber-200 bg-amber-50 p-3 pl-6 text-xs text-amber-800">
@@ -520,6 +567,16 @@ export function StaffReviewDashboard() {
                       className="rounded bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-50"
                     >
                       Reconsider (reopen for review)
+                    </button>
+                  )}
+                  {activeCase.reconsiderationPending && (
+                    <button
+                      type="button"
+                      onClick={() => handleDecision('DECLINE_RECONSIDERATION')}
+                      disabled={busy}
+                      className="rounded border border-blue-600 bg-white px-4 py-2 text-xs font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                    >
+                      Decline request
                     </button>
                   )}
                 </div>

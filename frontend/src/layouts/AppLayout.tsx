@@ -23,7 +23,7 @@ export function AppLayout() {
           <NavLink to="/search">Search</NavLink>
           <NavLink to="/claims">Claims</NavLink>
           <NavLink to="/evidence">Evidence</NavLink>
-          {user?.role === 'ADMIN' && <NavLink to="/staff/reviews">Staff review</NavLink>}
+          {user?.role === 'ADMIN' && <NavLink to="/admin">Admin console</NavLink>}
         </nav>
         <div className="account-nav">
           <span className="account-name">{user?.name}</span>

@@ -15,7 +15,13 @@ export type ClaimStatus =
 export type RiskTier = 'LOW' | 'MEDIUM' | 'HIGH'
 export type CustodyStatus = 'REPORTED' | 'IN_CUSTODY' | 'RESERVED' | 'RETURNED'
 export type DoveStrength = 'WEAK' | 'MODERATE' | 'STRONG' | 'REVIEW_REQUIRED'
-export type DecisionAction = 'APPROVE' | 'HOLD' | 'REJECT' | 'RECONSIDER'
+export type DecisionAction = 'APPROVE' | 'HOLD' | 'REJECT' | 'RECONSIDER' | 'DECLINE_RECONSIDERATION'
+export type ReconsiderationStatus = 'NONE' | 'PENDING' | 'ACCEPTED' | 'DECLINED'
+
+/** Server-side length limits, mirrored so forms can stop typing at the limit. */
+export const NOTE_MAX_LENGTH = 255
+export const RISK_REASON_MAX_LENGTH = 200
+export const RECONSIDERATION_MAX_LENGTH = 1000
 
 /** What a claimant may see about their own claim. */
 export interface ClaimantClaim {
@@ -26,6 +32,39 @@ export interface ClaimantClaim {
   createdAt: string
   updatedAt: string
   withdrawable: boolean
+  reconsiderationStatus: ReconsiderationStatus
+  canRequestReconsideration: boolean
+}
+
+/** Staff-only case timeline (GET /api/v1/claims/staff/claims/{id}/history). */
+export interface CaseHistory {
+  claimId: number
+  claimantId: number
+  claimantName: string
+  lostReportId: number
+  foundReportId: number
+  itemTitle: string
+  status: ClaimStatus
+  riskTier: RiskTier
+  events: {
+    at: string
+    source: 'CLAIM' | 'DECISION' | 'CUSTODY'
+    type: string
+    actorName: string
+    summary: string
+    details: string | null
+  }[]
+}
+
+export interface CaseSummary {
+  claimId: number
+  claimantName: string
+  foundReportId: number
+  itemTitle: string
+  status: ClaimStatus
+  riskTier: RiskTier
+  createdAt: string
+  updatedAt: string
 }
 
 /** One row of the staff review queue (GET /api/v1/claims/staff/cases). */
@@ -57,6 +96,9 @@ export interface StaffClaimCaseView {
     pendingSupplement: boolean
   }
   competingActiveClaimsCount: number
+  reconsiderationPending: boolean
+  reconsiderationReason: string | null
+  reconsiderationRequestedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -72,7 +114,14 @@ export const claimsApi = {
   withdrawClaim: (claimId: number) =>
     request<ClaimantClaim>(`/api/v1/claims/${claimId}`, { method: 'DELETE' }),
 
+  requestReconsideration: (claimId: number, reason: string) =>
+    request<ClaimantClaim>(`/api/v1/claims/${claimId}/reconsideration`, { method: 'POST', body: json({ reason }) }),
+
   reviewQueue: () => request<StaffClaimCaseView[]>('/api/v1/claims/staff/cases'),
+
+  historyCases: () => request<CaseSummary[]>('/api/v1/claims/staff/history'),
+
+  caseHistory: (claimId: number) => request<CaseHistory>(`/api/v1/claims/staff/claims/${claimId}/history`),
 
   recordCustodyIntake: (foundReportId: number, storageReference: string, conditionNotes: string) =>
     request<unknown>(`/api/v1/claims/staff/custody/${foundReportId}/intake`, {

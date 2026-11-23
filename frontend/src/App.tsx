@@ -11,6 +11,8 @@ import { SearchPage } from './pages/SearchPage'
 import EvidenceWorkspace from './features/evidence/EvidenceWorkspace'
 import { StudentClaimPortal } from './features/claims/StudentClaimPortal'
 import { StaffReviewDashboard } from './features/claims/StaffReviewDashboard'
+import { AdminLayout } from './features/admin/AdminLayout'
+import { CaseHistoryPage } from './features/admin/CaseHistoryPage'
 
 export function App() {
   const { user, loading } = useAuth()
@@ -28,9 +30,15 @@ export function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/reports/:id/candidates" element={<CandidatesPage />} />
         <Route path="/claims" element={<StudentClaimPortal />} />
-        <Route element={<RequireAdmin />}>
-          <Route path="/staff/reviews" element={<StaffReviewDashboard />} />
+      </Route>
+      {/* Admin console (test UI): administration functions only, separate from the user layout. */}
+      <Route element={<RequireAdmin />}>
+        <Route path="/admin" element={<AdminLayout />}>
+          <Route index element={<StaffReviewDashboard />} />
+          <Route path="history" element={<CaseHistoryPage />} />
+          <Route path="history/:claimId" element={<CaseHistoryPage />} />
         </Route>
+        <Route path="/staff/reviews" element={<Navigate to="/admin" replace />} />
       </Route>
       <Route path="/evidence" element={<EvidenceWorkspace />} />
     </Route>

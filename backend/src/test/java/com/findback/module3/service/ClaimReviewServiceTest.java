@@ -5,6 +5,8 @@ import com.findback.module3.domain.ClaimStatus;
 import com.findback.module3.domain.CustodyStatus;
 import com.findback.module3.domain.ItemCustodyState;
 import com.findback.module3.domain.RiskTier;
+import com.findback.module3.ports.CrossModulePorts.DoveEvaluationPort;
+import com.findback.module3.ports.CrossModulePorts.DoveSummaryDto;
 import com.findback.module3.ports.CrossModulePorts.OperationsPort;
 import com.findback.module3.ports.CrossModulePorts.ReportLifecyclePort;
 import com.findback.module3.ports.CrossModulePorts.ReportLookupPort;
@@ -37,8 +39,8 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 public class ClaimReviewServiceTest {
-    private static final ReportSummaryDto LOST = new ReportSummaryDto(510L, 2012L, "LOST", "EARBUDS", "Earbuds", "Library", true);
-    private static final ReportSummaryDto FOUND = new ReportSummaryDto(610L, 99L, "FOUND", "EARBUDS", "Earbuds", "Library", true);
+    private static final ReportSummaryDto LOST = new ReportSummaryDto(510L, 2012L, "LOST", "EARBUDS", "Earbuds", "Library", true, null);
+    private static final ReportSummaryDto FOUND = new ReportSummaryDto(610L, 99L, "FOUND", "EARBUDS", "Earbuds", "Library", true, null);
     private static final Long STAFF = 9001L;
 
     @Mock private ReportLookupPort reportPort;
@@ -48,6 +50,7 @@ public class ClaimReviewServiceTest {
     @Mock private CustodyEventRepository custodyEventRepository;
     @Mock private AdminReviewRepository reviewRepository;
     @Mock private ReportLifecyclePort reportLifecycle;
+    @Mock private DoveEvaluationPort dovePort;
 
     @InjectMocks
     private ClaimReviewService claimReviewService;
@@ -277,6 +280,103 @@ public class ClaimReviewServiceTest {
         verify(reportLifecycle).closeReport(610L);
         verify(reportLifecycle).closeReport(510L);
         verify(opsPort).recordAuditEvent(STAFF, "HANDOVER_COMPLETED", "CLAIM-1", "APPROVED -> COMPLETED");
+    }
+
+    @Test
+    void claimTierIsTheHighestOfBothReportsAndCategories_FR10() {
+        ReportSummaryDto lowLost = new ReportSummaryDto(510L, 2012L, "LOST", "EARBUDS", "Earbuds", "Library", true, "LOW");
+        ReportSummaryDto highFound = new ReportSummaryDto(610L, 99L, "FOUND", "EARBUDS", "Earbuds", "Library", true, "HIGH");
+        when(reportPort.getReportById(510L)).thenReturn(lowLost);
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(highFound);
+        when(claimRepository.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(dovePort.evaluateOrGetSummary(any(), any(), any()))
+                .thenReturn(new DoveSummaryDto(1L, "WEAK", 1, 2, 0, false, 1));
+
+        Claim claim = claimReviewService.createClaim(2012L, 510L, 610L);
+
+        assertEquals(RiskTier.HIGH, claim.getRiskTier());
+    }
+
+    @Test
+    void rejectedClaimantMustUseReconsiderationInsteadOfANewClaim() {
+        when(reportPort.getReportById(510L)).thenReturn(LOST);
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(FOUND);
+        when(claimRepository.findByClaimantIdAndFoundReportId(2012L, 610L)).thenReturn(List.of(claim(ClaimStatus.REJECTED)));
+
+        var exception = assertThrows(ResponseStatusException.class, () -> claimReviewService.createClaim(2012L, 510L, 610L));
+
+        assertStatus(HttpStatus.CONFLICT, exception);
+        verify(claimRepository, never()).save(any());
+    }
+
+    @Test
+    void riskTierCanOnlyBeRaised_FR10() {
+        Claim claim = claim(ClaimStatus.UNDER_REVIEW);
+        claim.setRiskTier(RiskTier.MEDIUM);
+        when(reportPort.getReportById(610L)).thenReturn(FOUND);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+
+        assertStatus(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.escalateRiskTier(STAFF, 1L, RiskTier.LOW, "Looks harmless")));
+        assertStatus(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.escalateRiskTier(STAFF, 1L, RiskTier.MEDIUM, "Same tier")));
+        assertEquals(RiskTier.MEDIUM, claim.getRiskTier());
+        verify(reviewRepository, never()).save(any());
+    }
+
+    @Test
+    void reconsiderationIsOncePerRejectedClaim() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.REJECTED);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+
+        claimReviewService.requestReconsideration(1L, 2012L, "I found the box with the serial printed on it");
+
+        assertEquals("PENDING", claim.getReconsiderationStatus());
+        assertStatus(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.requestReconsideration(1L, 2012L, "Asking again")));
+        assertStatus(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.requestReconsideration(1L, 3000L, "Not my claim")));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ClaimStatus.class, names = {"UNDER_REVIEW", "ON_HOLD", "APPROVED", "WITHDRAWN", "COMPLETED"})
+    void onlyRejectedClaimsCanBeReconsidered(ClaimStatus status) {
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claimWithId(1L, 2012L, status)));
+
+        assertStatus(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.requestReconsideration(1L, 2012L, "Please look again")));
+    }
+
+    @Test
+    void noReconsiderationOnceTheItemIsReturned() {
+        ItemCustodyState returned = reservedFor(9L);
+        returned.setCustodyStatus(CustodyStatus.RETURNED);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claimWithId(1L, 2012L, ClaimStatus.REJECTED)));
+        when(custodyRepository.findById(610L)).thenReturn(Optional.of(returned));
+
+        assertStatus(HttpStatus.CONFLICT, assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.requestReconsideration(1L, 2012L, "Please look again")));
+    }
+
+    @Test
+    void staffCanDeclineAPendingReconsideration() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.REJECTED);
+        claim.requestReconsideration("New proof");
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+        when(reportPort.getReportById(610L)).thenReturn(FOUND);
+
+        claimReviewService.recordStaffDecision(STAFF, 1L, "DECLINE_RECONSIDERATION", "Receipt does not match the item", null);
+
+        assertEquals(ClaimStatus.REJECTED, claim.getStatus());
+        assertEquals("DECLINED", claim.getReconsiderationStatus());
+    }
+
+    @Test
+    void overlongDecisionReasonIsRejectedClearly() {
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.recordStaffDecision(STAFF, 1L, "HOLD", "x".repeat(256), null));
+
+        assertStatus(HttpStatus.BAD_REQUEST, exception);
     }
 
     @Test

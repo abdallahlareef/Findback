@@ -25,7 +25,9 @@ public record ReportResponse(
         ReportStatus status,
 
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+
+        String riskLevel
 
 ) {
 
@@ -51,7 +53,9 @@ public record ReportResponse(
                 report.getStatus(),
 
                 report.getCreatedAt(),
-                report.getUpdatedAt()
+                report.getUpdatedAt(),
+
+                report.getRiskLevel()
         );
     }
 }

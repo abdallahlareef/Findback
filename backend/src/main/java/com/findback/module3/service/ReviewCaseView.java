@@ -30,6 +30,9 @@ public record ReviewCaseView(
         Long reservedByClaimId,
         DoveView doveSummary,
         long competingActiveClaimsCount,
+        boolean reconsiderationPending,
+        String reconsiderationReason,
+        OffsetDateTime reconsiderationRequestedAt,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
 
