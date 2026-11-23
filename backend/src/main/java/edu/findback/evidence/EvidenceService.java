@@ -87,6 +87,7 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
         return new ReportSummaryDto(r.getId(),r.getAuthor().getId(),r.getType().name(),r.getCategory(),
             r.getCategory(),r.getCampusZone(),versions.existsByStreamKey(reportKey(reportId)));
     }
+    @Override public ReportSummaryDto lockReportForUpdate(Long reportId) { lockReport(reportId); return getReportById(reportId); }
     // The found-report row serializes all writes for a pair, including first creation.
     // Counters survive claim withdrawal/recreation; they are not owned by the claim row.
     private EvidencePair pair(Claim claim) {

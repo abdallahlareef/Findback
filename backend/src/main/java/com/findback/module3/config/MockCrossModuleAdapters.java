@@ -48,6 +48,11 @@ public class MockCrossModuleAdapters {
             }
 
             @Override
+            public void issueHandoverCredential(Long claimId, Long claimantId) {
+                log.info("[M4-HANDOVER-MOCK] Issued one-time credential for Claim #{} to User #{}", claimId, claimantId);
+            }
+
+            @Override
             public void revokeActiveHandoverCredential(Long claimId, String reason) {
                 log.info("[M4-HANDOVER-MOCK] Revoked credential for Claim #{} | Reason: {}", claimId, reason);
             }
