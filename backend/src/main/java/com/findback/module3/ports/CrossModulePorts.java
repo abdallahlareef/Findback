@@ -15,9 +15,14 @@ public interface CrossModulePorts {
         default ReportSummaryDto lockReportForUpdate(Long reportId) { return getReportById(reportId); }
     }
 
+    /**
+     * @param matchCount          distinct matching private characteristics (FR-10 thresholds use this)
+     * @param identifierMatched   the serial/identifier characteristic is a confirmed MATCH (required for HIGH risk)
+     */
     record DoveSummaryDto(Long claimId, String strengthLabel,
                           int matchCount, int unknownCount, int contradictionCount,
-                          boolean hasCriticalIdentifierConflict, int submissionAttemptsUsed) {}
+                          boolean hasCriticalIdentifierConflict, int submissionAttemptsUsed,
+                          boolean identifierMatched) {}
 
     interface DoveEvaluationPort {
         DoveSummaryDto evaluateOrGetSummary(Long claimId, Long lostReportId, Long foundReportId);
@@ -32,6 +37,15 @@ public interface CrossModulePorts {
     /** Member 1 boundary: closes reports once their item has been returned to its owner. */
     interface ReportLifecyclePort {
         void closeReport(Long reportId);
+    }
+
+    /** Safe (non-evidence) fields of a found report, for the staff custody desk. */
+    record FoundItemDto(Long reportId, Long finderId, String category, String colour, String campusZone,
+                        java.time.LocalDate eventDate, String reportStatus, String riskLevel) {}
+
+    /** Member 1 boundary: every found report, claimed or not, so staff can log items handed in at the desk. */
+    interface FoundItemDirectoryPort {
+        java.util.List<FoundItemDto> listFoundItems();
     }
 
     /** Member 4 boundary: audit trail, notifications and one-time handover credentials. */

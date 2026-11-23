@@ -39,6 +39,10 @@ public class Claim {
     @Column(length = 16)
     private String reconsiderationOutcome;
 
+    /** HIGH risk two-person rule: the first of two different approving staff members (FR-10). */
+    private Long firstApproverId;
+    private OffsetDateTime firstApprovedAt;
+
     @Column(nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -59,6 +63,20 @@ public class Claim {
     public void setStatus(ClaimStatus status) {
         this.status = status;
         this.updatedAt = OffsetDateTime.now();
+        // A first approval only counts while the claim stays under review; any hold, rejection,
+        // withdrawal or final approval (including evidence-triggered holds) starts the two-person check over.
+        if (status != ClaimStatus.UNDER_REVIEW) {
+            this.firstApproverId = null;
+            this.firstApprovedAt = null;
+        }
+    }
+    public Long getFirstApproverId() { return firstApproverId; }
+    public OffsetDateTime getFirstApprovedAt() { return firstApprovedAt; }
+    public boolean isAwaitingSecondApproval() { return firstApproverId != null; }
+    public void recordFirstApproval(Long staffId) {
+        this.firstApproverId = staffId;
+        this.firstApprovedAt = OffsetDateTime.now();
+        this.updatedAt = this.firstApprovedAt;
     }
     public RiskTier getRiskTier() { return riskTier; }
     public void setRiskTier(RiskTier riskTier) { this.riskTier = riskTier; }

@@ -207,7 +207,7 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
             throw error(HttpStatus.CONFLICT,"Claim/report mismatch.");
         EvidencePair p=pair(c); VerificationAttempt a=compare(c,p);
         return new DoveSummaryDto(claimId,a.strength,a.distinctMatches,
-            count(a,"UNKNOWN"),count(a,"CONTRADICTION"),a.criticalConflict,p.submissions);
+            count(a,"UNKNOWN"),count(a,"CONTRADICTION"),a.criticalConflict,p.submissions,"MATCH".equals(a.serialOutcome));
     }
     @Override public boolean hasPendingSupplement(Long claimId) { return pair(claim(claimId)).pendingRequest!=null; }
     private int count(VerificationAttempt a,String outcome) { return (int)List.of(a.serialOutcome,a.markOutcome,a.accessoryOutcome).stream().filter(outcome::equals).count(); }

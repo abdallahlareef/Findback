@@ -31,6 +31,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
@@ -172,6 +173,23 @@ public class ClaimReviewServiceTest {
     }
 
     @Test
+    void staffWhoRaisedADisputeCannotResolveIt() {
+        ItemCustodyState state = disputed();
+        state.raiseDispute(STAFF, "A second claimant came forward");
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(FOUND);
+        when(custodyRepository.findByIdForUpdate(610L)).thenReturn(Optional.of(state));
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.resolveDispute(STAFF, 610L, "Resolving my own dispute"));
+        assertStatus(HttpStatus.FORBIDDEN, exception);
+        assertEquals(true, state.isDisputeBlocked());
+
+        claimReviewService.resolveDispute(9002L, 610L, "Second reviewer checked both claimants' IDs");
+        assertEquals(false, state.isDisputeBlocked());
+        assertEquals(null, state.getDisputeRaisedById());
+    }
+
+    @Test
     void resolvingDisputeRequiresReason_FR12() {
         var exception = assertThrows(ResponseStatusException.class, () -> claimReviewService.resolveDispute(STAFF, 610L, " "));
 
@@ -290,7 +308,7 @@ public class ClaimReviewServiceTest {
         when(reportPort.lockReportForUpdate(610L)).thenReturn(highFound);
         when(claimRepository.save(any())).thenAnswer(call -> call.getArgument(0));
         when(dovePort.evaluateOrGetSummary(any(), any(), any()))
-                .thenReturn(new DoveSummaryDto(1L, "WEAK", 1, 2, 0, false, 1));
+                .thenReturn(new DoveSummaryDto(1L, "WEAK", 1, 2, 0, false, 1, true));
 
         Claim claim = claimReviewService.createClaim(2012L, 510L, 610L);
 
@@ -377,6 +395,126 @@ public class ClaimReviewServiceTest {
                 () -> claimReviewService.recordStaffDecision(STAFF, 1L, "HOLD", "x".repeat(256), null));
 
         assertStatus(HttpStatus.BAD_REQUEST, exception);
+    }
+
+    // ---- FR-10 risk-adaptive approval -------------------------------------------------------
+
+    private ItemCustodyState inCustody() {
+        ItemCustodyState state = new ItemCustodyState();
+        state.setFoundReportId(610L);
+        state.setCustodyStatus(CustodyStatus.IN_CUSTODY);
+        state.setStorageReference("LOCKER-1");
+        return state;
+    }
+
+    private Claim reviewable(RiskTier tier, int matches, boolean identifierMatched, ItemCustodyState custody) {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.UNDER_REVIEW);
+        claim.setRiskTier(tier);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+        when(reportPort.getReportById(610L)).thenReturn(FOUND);
+        when(dovePort.evaluateOrGetSummary(1L, 510L, 610L))
+                .thenReturn(new DoveSummaryDto(1L, "MODERATE", matches, 3 - matches, 0, false, 1, identifierMatched));
+        when(custodyRepository.findByIdForUpdate(610L)).thenReturn(Optional.of(custody));
+        return claim;
+    }
+
+    @Test
+    void lowRiskCanBeApprovedOnOneMatchingCharacteristic() {
+        ItemCustodyState custody = inCustody();
+        Claim claim = reviewable(RiskTier.LOW, 1, false, custody);
+
+        claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Private mark matches", null);
+
+        assertEquals(ClaimStatus.APPROVED, claim.getStatus());
+        assertEquals(CustodyStatus.RESERVED, custody.getCustodyStatus());
+    }
+
+    @Test
+    void mediumRiskNeedsTwoMatchingCharacteristics() {
+        ItemCustodyState custody = inCustody();
+        Claim claim = reviewable(RiskTier.MEDIUM, 1, true, custody);
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Serial matches", null));
+
+        assertStatus(HttpStatus.CONFLICT, exception);
+        assertTrue(exception.getReason().contains("MEDIUM risk needs at least 2"));
+        assertEquals(ClaimStatus.UNDER_REVIEW, claim.getStatus());
+        assertEquals(CustodyStatus.IN_CUSTODY, custody.getCustodyStatus());
+    }
+
+    @Test
+    void highRiskNeedsTheIdentifierToMatch() {
+        reviewable(RiskTier.HIGH, 2, false, inCustody());
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Mark and case match", "Inspected"));
+
+        assertTrue(exception.getReason().contains("serial/identifier"));
+    }
+
+    @Test
+    void highRiskFirstApprovalNeedsInspectionNotes() {
+        reviewable(RiskTier.HIGH, 2, true, inCustody());
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Looks right", "  "));
+
+        assertTrue(exception.getReason().contains("physical inspection notes"));
+    }
+
+    @Test
+    void highRiskNeedsTwoDifferentApprovers() {
+        ItemCustodyState custody = inCustody();
+        Claim claim = reviewable(RiskTier.HIGH, 2, true, custody);
+
+        claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Serial and sticker match", "Serial on base plate checked");
+
+        assertEquals(ClaimStatus.UNDER_REVIEW, claim.getStatus());
+        assertEquals(STAFF, claim.getFirstApproverId());
+        assertEquals(CustodyStatus.IN_CUSTODY, custody.getCustodyStatus());
+        verify(opsPort, never()).issueHandoverCredential(anyLong(), anyLong());
+
+        var sameReviewer = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.recordStaffDecision(STAFF, 1L, "APPROVE", "Approving again", null));
+        assertTrue(sameReviewer.getReason().contains("different staff member"));
+
+        claimReviewService.recordStaffDecision(9002L, 1L, "APPROVE", "Second review agrees", null);
+
+        assertEquals(ClaimStatus.APPROVED, claim.getStatus());
+        assertEquals(CustodyStatus.RESERVED, custody.getCustodyStatus());
+        verify(opsPort).issueHandoverCredential(1L, 2012L);
+    }
+
+    @Test
+    void raisingTheTierOfAnApprovedClaimSendsItBackForReview() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.APPROVED);
+        claim.setRiskTier(RiskTier.LOW);
+        ItemCustodyState custody = reservedFor(1L);
+        custody.setStorageReference("LOCKER-1");
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+        when(reportPort.getReportById(610L)).thenReturn(FOUND);
+        when(custodyRepository.findByIdForUpdate(610L)).thenReturn(Optional.of(custody));
+
+        claimReviewService.escalateRiskTier(STAFF, 1L, RiskTier.HIGH, "It is a laptop, not an umbrella");
+
+        assertEquals(ClaimStatus.UNDER_REVIEW, claim.getStatus());
+        assertEquals(RiskTier.HIGH, claim.getRiskTier());
+        assertEquals(CustodyStatus.IN_CUSTODY, custody.getCustodyStatus());
+        assertEquals(null, custody.getReservedByClaimId());
+        assertEquals(false, custody.isDisputeBlocked());
+        verify(opsPort).revokeActiveHandoverCredential(anyLong(), any());
+    }
+
+    @Test
+    void leavingReviewResetsAFirstApproval() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.UNDER_REVIEW);
+        claim.recordFirstApproval(STAFF);
+
+        claim.setStatus(ClaimStatus.ON_HOLD);
+        claim.setStatus(ClaimStatus.UNDER_REVIEW);
+
+        assertEquals(null, claim.getFirstApproverId());
     }
 
     @Test

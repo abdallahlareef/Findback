@@ -8,6 +8,7 @@ const EVENT_LABEL: Record<string, string> = {
   CLAIM_SUBMITTED: 'Claim submitted',
   CLAIM_WITHDRAWN: 'Withdrawn by claimant',
   RECONSIDERATION_REQUESTED: 'Reconsideration requested',
+  APPROVE_FIRST: 'First approval (HIGH risk, 1 of 2)',
   APPROVE: 'Approved & item reserved',
   HOLD: 'Placed on hold',
   REJECT: 'Rejected',
@@ -19,14 +20,16 @@ const EVENT_LABEL: Record<string, string> = {
   EVIDENCE_CHANGED: 'Held: evidence changed',
   RECEIVED_INTO_CUSTODY: 'Received into custody',
   STORAGE_RECONFIRMED: 'Storage re-confirmed',
+  DISPUTE_RAISED: 'Dispute raised (approved claim put on hold)',
   DISPUTE_RESOLVED: 'Dispute resolved',
   RELEASED_TO_OWNER: 'Released to owner',
 }
 
+/** Same pill colours as the student UI: lost-report amber, matched indigo, found green. */
 const SOURCE_STYLE: Record<string, string> = {
-  CLAIM: 'bg-blue-50 text-blue-800 border-blue-200',
-  DECISION: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-  CUSTODY: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  CLAIM: 'bg-fb-warn-bg text-fb-warn border-fb-warn-line',
+  DECISION: 'bg-fb-info-bg text-fb-info border-fb-info-line',
+  CUSTODY: 'bg-fb-mint text-fb-green-dark border-fb-mint-line',
 }
 
 const SOURCE_LABEL: Record<string, string> = { CLAIM: 'Claimant', DECISION: 'Staff decision', CUSTODY: 'Custody' }
@@ -81,46 +84,49 @@ export function CaseHistoryPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-12">
+    <div>
+      <p className="eyebrow">STAFF · AUDIT TRAIL</p>
+      <h1>Case history</h1>
+      <p className="page-intro">Every decision with its reason, every custody event and every claimant action, with who did it and when.</p>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
       <section className="space-y-3 lg:col-span-4" aria-label="Cases">
-        <h1 className="text-xl font-bold">Case history</h1>
         <form onSubmit={openLookup} className="flex gap-2">
           <input
             aria-label="Open claim number"
             value={lookupId}
             onChange={(e) => setLookupId(e.target.value)}
             placeholder="Claim #"
-            className="w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+            className="w-full rounded-lg border border-fb-line bg-white px-3 py-1.5 text-sm"
           />
-          <button type="submit" className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white">Open</button>
+          <button type="submit" className="button button-primary button-small">Open</button>
         </form>
         <input
           aria-label="Filter cases"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter by name, item, status…"
-          className="w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+          className="w-full rounded-lg border border-fb-line bg-white px-3 py-1.5 text-sm"
         />
-        {listError && <p role="alert" className="text-sm text-red-700">{listError}</p>}
+        {listError && <p role="alert" className="text-sm text-fb-error">{listError}</p>}
         {casesLoading ? (
-          <p className="text-sm text-slate-600">Loading cases…</p>
+          <p className="text-sm text-fb-muted">Loading cases…</p>
         ) : visibleCases.length === 0 ? (
-          <p className="text-sm text-slate-600">No cases to show.</p>
+          <p className="text-sm text-fb-muted">No cases to show.</p>
         ) : (
           <ul className="space-y-2">
             {visibleCases.map((c) => (
               <li key={c.claimId}>
                 <Link
                   to={`/admin/history/${c.claimId}`}
-                  className={`block rounded-lg border p-3 text-sm ${
-                    c.claimId === selectedId ? 'border-blue-600 bg-blue-50/60' : 'border-slate-200 bg-white hover:border-slate-300'
+                  className={`block rounded-2xl border p-3 text-sm ${
+                    c.claimId === selectedId ? 'border-fb-green bg-fb-mint/60' : 'border-fb-line bg-white hover:border-fb-mint-line'
                   }`}
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="font-semibold">Claim #{c.claimId} – {c.itemTitle}</span>
-                    <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{c.status}</span>
+                    <span className="rounded-full bg-fb-chip px-2 py-0.5 text-xs font-semibold text-fb-ink">{c.status}</span>
                   </span>
-                  <span className="mt-1 block text-xs text-slate-600">
+                  <span className="mt-1 block text-xs text-fb-muted">
                     {c.claimantName} · found #{c.foundReportId} · risk {c.riskTier} · updated {new Date(c.updatedAt).toLocaleString()}
                   </span>
                 </Link>
@@ -132,18 +138,16 @@ export function CaseHistoryPage() {
 
       <section className="lg:col-span-8" aria-label="Timeline">
         {selectedId === null ? (
-          <p className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
-            Choose a case to see who did what, when and why.
-          </p>
+          <p className="empty-state">Choose a case to see who did what, when and why.</p>
         ) : shownError ? (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">{shownError}</p>
+          <p role="alert" className="rounded-2xl border border-fb-error-line bg-fb-error-bg p-4 text-sm text-fb-error">{shownError}</p>
         ) : historyLoading || !shown ? (
-          <p className="text-sm text-slate-600">Loading case #{selectedId}…</p>
+          <p className="text-sm text-fb-muted">Loading case #{selectedId}…</p>
         ) : (
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="border-b border-slate-100 pb-3">
-              <h2 className="text-lg font-semibold">Claim #{shown.claimId} – {shown.itemTitle}</h2>
-              <p className="text-xs text-slate-600">
+          <div className="rounded-2xl border border-fb-line bg-white p-5 shadow-sm">
+            <div className="border-b border-fb-line pb-3">
+              <h3>Claim #{shown.claimId} – {shown.itemTitle}</h3>
+              <p className="text-xs text-fb-muted">
                 Claimant {shown.claimantName} · lost report #{shown.lostReportId} · found report #{shown.foundReportId} ·
                 status <strong>{shown.status}</strong> · risk <strong>{shown.riskTier}</strong>
               </p>
@@ -151,17 +155,17 @@ export function CaseHistoryPage() {
             <ol className="mt-4 space-y-3">
               {shown.events.map((event, index) => (
                 <li key={`${event.at}-${event.type}-${index}`} className="flex gap-3">
-                  <span className="w-36 shrink-0 text-xs text-slate-500">{new Date(event.at).toLocaleString()}</span>
-                  <div className="flex-1 rounded border border-slate-200 p-3">
+                  <span className="w-36 shrink-0 text-xs text-fb-muted">{new Date(event.at).toLocaleString()}</span>
+                  <div className="flex-1 rounded-lg border border-fb-line p-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${SOURCE_STYLE[event.source] ?? ''}`}>
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${SOURCE_STYLE[event.source] ?? ''}`}>
                         {SOURCE_LABEL[event.source] ?? event.source}
                       </span>
                       <span className="text-sm font-semibold">{EVENT_LABEL[event.type] ?? event.type}</span>
-                      <span className="text-xs text-slate-500">by {event.actorName}</span>
+                      <span className="text-xs text-fb-muted">by {event.actorName}</span>
                     </div>
-                    <p className="mt-1 text-xs text-slate-600">{event.summary}</p>
-                    {event.details && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{event.details}</p>}
+                    <p className="mt-1! text-xs text-fb-muted">{event.summary}</p>
+                    {event.details && <p className="mt-1! whitespace-pre-wrap text-sm text-fb-ink">{event.details}</p>}
                   </div>
                 </li>
               ))}
@@ -169,6 +173,7 @@ export function CaseHistoryPage() {
           </div>
         )}
       </section>
+    </div>
     </div>
   )
 }

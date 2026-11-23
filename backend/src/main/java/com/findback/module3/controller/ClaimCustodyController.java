@@ -3,10 +3,15 @@ package com.findback.module3.controller;
 import com.findback.module3.domain.*;
 import com.findback.module3.service.CaseHistoryView;
 import com.findback.module3.service.ClaimReviewService;
+import com.findback.module3.service.CustodyDeskView;
 import com.findback.module3.service.ReviewCaseView;
 import edu.findback.evidence.EvidenceAccess;
+import edu.findback.user.Role;
+import edu.findback.user.User;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -46,6 +51,16 @@ public class ClaimCustodyController {
         return SafeClaim.from(claim, service.reconsiderationAvailable(claim));
     }
 
+    /** Admin-only accounts: staff use the admin console and cannot act as claimants. */
+    private User student() {
+        User user = access.current();
+        if (user.getRole() == Role.ADMIN) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Staff accounts cannot use student features. Use a personal student account to claim items.");
+        }
+        return user;
+    }
+
     public record CreateClaimRequest(Long lostReportId, Long foundReportId) {}
     public record ReconsiderationRequest(String reason) {}
     public record CustodyIntakeRequest(String storageReference, String conditionNotes) {}
@@ -56,31 +71,30 @@ public class ClaimCustodyController {
 
     @GetMapping("/mine")
     public List<SafeClaim> myClaims() {
-        return service.getClaimsForClaimant(access.current().getId()).stream().map(this::safe).toList();
+        return service.getClaimsForClaimant(student().getId()).stream().map(this::safe).toList();
     }
 
     @PostMapping
     public SafeClaim submitClaim(@RequestBody CreateClaimRequest req) {
-        return safe(service.createClaim(access.current().getId(), req.lostReportId(), req.foundReportId()));
+        return safe(service.createClaim(student().getId(), req.lostReportId(), req.foundReportId()));
     }
 
     /** FR-18 withdrawal of the caller's own claim. */
     @DeleteMapping("/{id}")
     public SafeClaim withdrawClaim(@PathVariable("id") Long id) {
-        return safe(service.withdrawClaim(id, access.current().getId()));
+        return safe(service.withdrawClaim(id, student().getId()));
     }
 
     /** Claimant asks staff to look again at their rejected claim (once per claim). */
     @PostMapping("/{id}/reconsideration")
     public SafeClaim requestReconsideration(@PathVariable("id") Long id, @RequestBody ReconsiderationRequest req) {
-        return safe(service.requestReconsideration(id, access.current().getId(), req.reason()));
+        return safe(service.requestReconsideration(id, student().getId(), req.reason()));
     }
 
-    /** Used by Member 2's Evidence Workspace to list claims for staff. */
+    /** Used by Member 2's Evidence Workspace to list claims for staff; hides cases the caller is involved in (T09). */
     @GetMapping("/staff/claims")
     public List<SafeClaim> listAllClaims() {
-        access.staff();
-        return service.getAllClaims().stream().map(c -> SafeClaim.from(c, false)).toList();
+        return service.getClaimsVisibleTo(access.staff().getId()).stream().map(c -> SafeClaim.from(c, false)).toList();
     }
 
     /** Case-history search list, excluding cases the caller is involved in (T09). */
@@ -99,6 +113,17 @@ public class ClaimCustodyController {
     @GetMapping("/staff/cases")
     public List<ReviewCaseView> reviewQueue() {
         return service.getReviewQueue(access.staff().getId());
+    }
+
+    /** FR-11 custody desk: all found items (claimed or not) and where they are stored. */
+    @GetMapping("/staff/custody")
+    public List<CustodyDeskView.Item> custodyDesk() {
+        return service.getCustodyDesk(access.staff().getId());
+    }
+
+    @GetMapping("/staff/custody/{foundReportId}/history")
+    public CustodyDeskView.ItemHistory itemCustodyHistory(@PathVariable Long foundReportId) {
+        return service.getItemCustodyHistory(access.staff().getId(), foundReportId);
     }
 
     @PostMapping("/staff/custody/{foundReportId}/intake")

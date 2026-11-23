@@ -28,6 +28,20 @@ class RiskTierTest {
         assertEquals(expected, RiskTier.fromCategory(category));
     }
 
+    /** Every report-form dropdown category (frontend ITEM_CATEGORIES) with the tier the form shows. */
+    @ParameterizedTest
+    @CsvSource({
+            "Phone, HIGH", "Laptop, HIGH", "Tablet, HIGH", "Wallet or purse, HIGH", "ID or student card, HIGH",
+            "Bank or payment card, HIGH", "Passport, HIGH",
+            "Earbuds or headphones, MEDIUM", "Calculator, MEDIUM", "Watch, MEDIUM", "Camera, MEDIUM",
+            "Charger or power bank, MEDIUM", "Keys, MEDIUM", "Glasses, MEDIUM", "Bag or backpack, MEDIUM",
+            "Water bottle, LOW", "Umbrella, LOW", "Notebook or book, LOW", "Stationery, LOW", "Clothing, LOW", "Lunch box, LOW"
+    })
+    void dropdownCategoriesHaveFixedTiers(String category, RiskTier expected) {
+        assertEquals(expected, RiskTier.fromCategory(category));
+        assertEquals(expected, RiskTier.FORM_CATEGORIES.get(category.toUpperCase()), "missing from FORM_CATEGORIES: " + category);
+    }
+
     @Test
     void blankCategoryIsMedium() {
         assertEquals(RiskTier.MEDIUM, RiskTier.fromCategory(" "));

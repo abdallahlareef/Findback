@@ -7,6 +7,38 @@ export const RISK_LEVELS: { value: RiskLevel; label: string; examples: string; p
   { value: 'HIGH', label: 'High risk', examples: 'laptop, smartphone, wallet', policy: 'Stronger evidence and a mandatory Security/Admin review are required.' },
 ]
 
+/**
+ * Fixed categories for the report form, each with its risk level. Mirrors RiskTier.FORM_CATEGORIES
+ * in the backend; RiskTierTest checks every entry. Using the same words on lost and found reports
+ * also makes candidate matching (exact category comparison) work reliably.
+ */
+export const ITEM_CATEGORIES: { value: string; risk: RiskLevel }[] = [
+  { value: 'Phone', risk: 'HIGH' },
+  { value: 'Laptop', risk: 'HIGH' },
+  { value: 'Tablet', risk: 'HIGH' },
+  { value: 'Wallet or purse', risk: 'HIGH' },
+  { value: 'ID or student card', risk: 'HIGH' },
+  { value: 'Bank or payment card', risk: 'HIGH' },
+  { value: 'Passport', risk: 'HIGH' },
+  { value: 'Earbuds or headphones', risk: 'MEDIUM' },
+  { value: 'Calculator', risk: 'MEDIUM' },
+  { value: 'Watch', risk: 'MEDIUM' },
+  { value: 'Camera', risk: 'MEDIUM' },
+  { value: 'Charger or power bank', risk: 'MEDIUM' },
+  { value: 'Keys', risk: 'MEDIUM' },
+  { value: 'Glasses', risk: 'MEDIUM' },
+  { value: 'Bag or backpack', risk: 'MEDIUM' },
+  { value: 'Water bottle', risk: 'LOW' },
+  { value: 'Umbrella', risk: 'LOW' },
+  { value: 'Notebook or book', risk: 'LOW' },
+  { value: 'Stationery', risk: 'LOW' },
+  { value: 'Clothing', risk: 'LOW' },
+  { value: 'Lunch box', risk: 'LOW' },
+]
+
+/** Dropdown value that reveals a free-text "describe the item type" field. */
+export const OTHER_CATEGORY = 'Other'
+
 const ORDER: RiskLevel[] = ['LOW', 'MEDIUM', 'HIGH']
 
 export function riskRank(level: RiskLevel): number {

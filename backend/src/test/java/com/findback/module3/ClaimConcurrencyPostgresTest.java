@@ -125,7 +125,8 @@ class ClaimConcurrencyPostgresTest {
         Report r = new Report();
         r.setAuthor(author);
         r.setType(type);
-        r.setCategory("EARBUDS");
+        // LOW risk, so the automatic serial match alone satisfies FR-10 and the tests focus on races.
+        r.setCategory("Umbrella");
         r.setColour("Black");
         r.setCampusZone("Library");
         r.setEventDate(LocalDate.now());

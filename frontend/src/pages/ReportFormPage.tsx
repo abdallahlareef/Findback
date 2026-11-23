@@ -4,8 +4,10 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import type { ReportPayload, ReportType } from '../types/api'
 import { ErrorMessage } from '../components/Feedback'
-import { RISK_LEVELS, riskLabel, riskRank, suggestRiskLevel } from '../features/claims/riskLevels'
+import { ITEM_CATEGORIES, OTHER_CATEGORY, RISK_LEVELS, riskLabel, riskRank, suggestRiskLevel } from '../features/claims/riskLevels'
 import type { RiskLevel } from '../features/claims/riskLevels'
+
+const CATEGORY_GROUPS: RiskLevel[] = ['HIGH', 'MEDIUM', 'LOW']
 
 export function ReportFormPage({ type }: { type: ReportType }) {
   const navigate = useNavigate()
@@ -16,12 +18,25 @@ export function ReportFormPage({ type }: { type: ReportType }) {
   const [riskLevel, setRiskLevel] = useState<RiskLevel | ''>('')
   const [riskChosenByUser, setRiskChosenByUser] = useState(false)
   const [suggestedRisk, setSuggestedRisk] = useState<RiskLevel | null>(null)
+  const [categoryChoice, setCategoryChoice] = useState('')
+  const [otherCategory, setOtherCategory] = useState('')
 
   // Pre-select the recommended level from the category until the user picks one themselves.
-  function onCategoryChange(category: string) {
-    const suggestion = suggestRiskLevel(category)
+  function applySuggestion(suggestion: RiskLevel | null) {
     setSuggestedRisk(suggestion)
     if (!riskChosenByUser) setRiskLevel(suggestion ?? '')
+  }
+
+  function onCategoryChoice(value: string) {
+    setCategoryChoice(value)
+    applySuggestion(value === OTHER_CATEGORY
+      ? suggestRiskLevel(otherCategory)
+      : ITEM_CATEGORIES.find((c) => c.value === value)?.risk ?? null)
+  }
+
+  function onOtherCategory(text: string) {
+    setOtherCategory(text)
+    applySuggestion(suggestRiskLevel(text))
   }
 
   const chosenPolicy = RISK_LEVELS.find((l) => l.value === riskLevel)?.policy
@@ -32,7 +47,7 @@ export function ReportFormPage({ type }: { type: ReportType }) {
     const data = new FormData(event.currentTarget)
     const report: ReportPayload = {
       type,
-      category: String(data.get('category')).trim(),
+      category: (categoryChoice === OTHER_CATEGORY ? otherCategory : categoryChoice).trim(),
       brand: optional(data.get('brand')),
       model: optional(data.get('model')),
       colour: String(data.get('colour')).trim(),
@@ -54,7 +69,22 @@ export function ReportFormPage({ type }: { type: ReportType }) {
     <form className="surface form-stack report-form" onSubmit={submit}>
       {error && <ErrorMessage>{error}</ErrorMessage>}
       <div className="form-grid">
-        <label>Category<input name="category" required maxLength={100} placeholder="e.g. Laptop, Earbuds, Umbrella" onChange={(e) => onCategoryChange(e.target.value)} /></label>
+        <label>Category
+          <select name="categoryChoice" required value={categoryChoice} onChange={(e) => onCategoryChoice(e.target.value)}>
+            <option value="" disabled>Choose the type of item</option>
+            {CATEGORY_GROUPS.map((level) => (
+              <optgroup key={level} label={riskLabel(level)}>
+                {ITEM_CATEGORIES.filter((c) => c.risk === level).map((c) => <option key={c.value} value={c.value}>{c.value}</option>)}
+              </optgroup>
+            ))}
+            <option value={OTHER_CATEGORY}>Other…</option>
+          </select>
+        </label>
+        {categoryChoice === OTHER_CATEGORY && (
+          <label>Describe the item type
+            <input name="otherCategory" required maxLength={100} value={otherCategory} onChange={(e) => onOtherCategory(e.target.value)} placeholder="e.g. Skateboard" />
+          </label>
+        )}
         <label>Colour<input name="colour" required maxLength={50} placeholder="e.g. Black" /></label>
         <label>Brand <span className="optional">Optional</span><input name="brand" maxLength={100} /></label>
         <label>Model <span className="optional">Optional</span><input name="model" maxLength={100} /></label>

@@ -86,6 +86,11 @@ export interface StaffClaimCaseView {
   storageReference: string | null
   disputeBlocked: boolean
   reservedByClaimId: number | null
+  /** Who put the approved claim on hold, when and why; that person cannot resolve the dispute. */
+  disputeRaisedByName: string | null
+  disputeReason: string | null
+  disputeRaisedAt: string | null
+  canResolveDispute: boolean
   doveSummary: {
     strengthLabel: DoveStrength
     matchCount: number
@@ -94,13 +99,65 @@ export interface StaffClaimCaseView {
     hasCriticalConflict: boolean
     submissionsUsed: number
     pendingSupplement: boolean
+    identifierMatched: boolean
   }
   competingActiveClaimsCount: number
   reconsiderationPending: boolean
   reconsiderationReason: string | null
   reconsiderationRequestedAt: string | null
+  /** HIGH risk two-person rule: set after the first of two approvals. */
+  firstApproverId: number | null
+  firstApproverName: string | null
+  firstApprovedAt: string | null
+  /** Server-computed reasons the current reviewer cannot approve yet (empty = approvable). */
+  approvalBlockers: string[]
   createdAt: string
   updatedAt: string
+}
+
+/** One found item on the staff custody desk (GET /api/v1/claims/staff/custody). */
+export interface CustodyDeskItem {
+  foundReportId: number
+  category: string
+  colour: string
+  campusZone: string
+  eventDate: string
+  reportStatus: 'ACTIVE' | 'MATCHED' | 'CLOSED'
+  riskLevel: RiskTier | null
+  finderName: string
+  custodyStatus: CustodyStatus
+  storageReference: string | null
+  receivedByName: string | null
+  custodyUpdatedAt: string | null
+  disputeBlocked: boolean
+  disputeRaisedByName: string | null
+  disputeReason: string | null
+  reservedByClaimId: number | null
+  activeClaimsCount: number
+  totalClaimsCount: number
+}
+
+export interface ItemCustodyHistory {
+  foundReportId: number
+  category: string
+  campusZone: string
+  finderName: string
+  custodyStatus: CustodyStatus
+  storageReference: string | null
+  disputeBlocked: boolean
+  reservedByClaimId: number | null
+  events: CaseHistory['events']
+  claims: { claimId: number; claimantName: string; status: ClaimStatus; riskTier: RiskTier; createdAt: string }[]
+}
+
+export interface DecisionResult {
+  status: ClaimStatus
+  firstApproverId: number | null
+}
+
+/** FR-10: distinct matching private characteristics needed per tier (mirrors the server). */
+export function requiredMatches(tier: RiskTier): number {
+  return tier === 'LOW' ? 1 : 2
 }
 
 const json = (body: unknown) => JSON.stringify(body)
@@ -123,6 +180,11 @@ export const claimsApi = {
 
   caseHistory: (claimId: number) => request<CaseHistory>(`/api/v1/claims/staff/claims/${claimId}/history`),
 
+  custodyDesk: () => request<CustodyDeskItem[]>('/api/v1/claims/staff/custody'),
+
+  itemCustodyHistory: (foundReportId: number) =>
+    request<ItemCustodyHistory>(`/api/v1/claims/staff/custody/${foundReportId}/history`),
+
   recordCustodyIntake: (foundReportId: number, storageReference: string, conditionNotes: string) =>
     request<unknown>(`/api/v1/claims/staff/custody/${foundReportId}/intake`, {
       method: 'POST',
@@ -142,13 +204,13 @@ export const claimsApi = {
     }),
 
   submitDecision: (claimId: number, action: DecisionAction, reason: string, physicalCheckNotes: string) =>
-    request<unknown>(`/api/v1/claims/staff/claims/${claimId}/decision`, {
+    request<DecisionResult>(`/api/v1/claims/staff/claims/${claimId}/decision`, {
       method: 'POST',
       body: json({ action, reason, physicalCheckNotes }),
     }),
 
   escalateRisk: (claimId: number, riskTier: RiskTier, reason: string) =>
-    request<unknown>(`/api/v1/claims/staff/claims/${claimId}/risk`, {
+    request<DecisionResult>(`/api/v1/claims/staff/claims/${claimId}/risk`, {
       method: 'PATCH',
       body: json({ riskTier, reason }),
     }),

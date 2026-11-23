@@ -1,0 +1,13 @@
+{
+  "name": "findback-e2e",
+  "private": true,
+  "description": "Browser tests for the Member 3 claim, custody and staff review flows",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}

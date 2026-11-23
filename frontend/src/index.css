@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+/*
+ * FindBack palette for Tailwind utilities (bg-fb-green, text-fb-ink, border-fb-line, ...), taken from
+ * the student UI's variables in styles.css so the Member 3 student and staff pages use the same colours.
+ */
+@theme {
+  --color-fb-ink: #1b3029;
+  --color-fb-muted: #697871;
+  --color-fb-bg: #f6f7f2;
+  --color-fb-line: #e0e6e0;
+  --color-fb-chip: #f0f2ef;
+  --color-fb-green: #1e6952;
+  --color-fb-green-dark: #164b3d;
+  --color-fb-mint: #e7f1eb;
+  --color-fb-mint-line: #c3dfcb;
+  --color-fb-coral: #a64535;
+  --color-fb-error: #8b3025;
+  --color-fb-error-bg: #fff0ed;
+  --color-fb-error-line: #f0c6bd;
+  --color-fb-warn: #895525;
+  --color-fb-warn-dark: #6c421c;
+  --color-fb-warn-bg: #fff0e4;
+  --color-fb-warn-line: #efd3b8;
+  --color-fb-info: #48538a;
+  --color-fb-info-bg: #edf0fb;
+  --color-fb-info-line: #d3d9f1;
+}
