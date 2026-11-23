@@ -29,11 +29,18 @@ public interface CrossModulePorts {
         String displayName(Long userId);
     }
 
+    /** Member 1 boundary: closes reports once their item has been returned to its owner. */
+    interface ReportLifecyclePort {
+        void closeReport(Long reportId);
+    }
+
     /** Member 4 boundary: audit trail, notifications and one-time handover credentials. */
     interface OperationsPort {
         void recordAuditEvent(Long actorId, String action, String caseRef, String outcome);
         void sendSafeNotification(Long recipientUserId, String safeMessage);
         void issueHandoverCredential(Long claimId, Long claimantId);
+        /** True only if the code is the claim's active one-time credential; a valid code is used up. */
+        boolean verifyAndConsumeHandoverCredential(Long claimId, String code);
         void revokeActiveHandoverCredential(Long claimId, String reason);
     }
 }

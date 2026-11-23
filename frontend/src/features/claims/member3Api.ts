@@ -80,6 +80,12 @@ export const claimsApi = {
       body: json({ storageReference, conditionNotes }),
     }),
 
+  completeHandover: (claimId: number, handoverCode: string, identityCheckNotes: string) =>
+    request<unknown>(`/api/v1/claims/staff/claims/${claimId}/handover`, {
+      method: 'POST',
+      body: json({ handoverCode, identityCheckNotes }),
+    }),
+
   resolveDispute: (foundReportId: number, resolution: string) =>
     request<unknown>(`/api/v1/claims/staff/custody/${foundReportId}/dispute/resolve`, {
       method: 'POST',

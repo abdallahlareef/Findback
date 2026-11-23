@@ -6,8 +6,10 @@ import com.findback.module3.domain.CustodyStatus;
 import com.findback.module3.domain.ItemCustodyState;
 import com.findback.module3.domain.RiskTier;
 import com.findback.module3.ports.CrossModulePorts.OperationsPort;
+import com.findback.module3.ports.CrossModulePorts.ReportLifecyclePort;
 import com.findback.module3.ports.CrossModulePorts.ReportLookupPort;
 import com.findback.module3.ports.CrossModulePorts.ReportSummaryDto;
+import com.findback.module3.repository.AdminReviewRepository;
 import com.findback.module3.repository.ClaimRepository;
 import com.findback.module3.repository.CustodyEventRepository;
 import com.findback.module3.repository.ItemCustodyStateRepository;
@@ -19,6 +21,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -43,6 +46,8 @@ public class ClaimReviewServiceTest {
     @Mock private ClaimRepository claimRepository;
     @Mock private ItemCustodyStateRepository custodyRepository;
     @Mock private CustodyEventRepository custodyEventRepository;
+    @Mock private AdminReviewRepository reviewRepository;
+    @Mock private ReportLifecyclePort reportLifecycle;
 
     @InjectMocks
     private ClaimReviewService claimReviewService;
@@ -194,6 +199,84 @@ public class ClaimReviewServiceTest {
                 () -> claimReviewService.resolveDispute(STAFF, 610L, "Nothing to resolve"));
 
         assertStatus(HttpStatus.CONFLICT, exception);
+    }
+
+    private static Claim claimWithId(long id, long claimantId, ClaimStatus status) {
+        Claim claim = claim(status);
+        claim.setClaimantId(claimantId);
+        ReflectionTestUtils.setField(claim, "claimId", id);
+        return claim;
+    }
+
+    private static ItemCustodyState reservedFor(long claimId) {
+        ItemCustodyState state = new ItemCustodyState();
+        state.setFoundReportId(610L);
+        state.setCustodyStatus(CustodyStatus.RESERVED);
+        state.setStorageReference("LOCKER-1");
+        state.setReservedByClaimId(claimId);
+        return state;
+    }
+
+    @Test
+    void handoverRequiresApprovedClaim() {
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claimWithId(1L, 2012L, ClaimStatus.UNDER_REVIEW)));
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(FOUND);
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.completeHandover(STAFF, 1L, "CODE-1", "Student ID checked"));
+
+        assertStatus(HttpStatus.CONFLICT, exception);
+        verify(opsPort, never()).verifyAndConsumeHandoverCredential(anyLong(), any());
+    }
+
+    @Test
+    void handoverRequiresIdentityCheckNotes_FR12() {
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.completeHandover(STAFF, 1L, "CODE-1", ""));
+
+        assertStatus(HttpStatus.BAD_REQUEST, exception);
+    }
+
+    @Test
+    void handoverWithInvalidCodeChangesNothing() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.APPROVED);
+        ItemCustodyState state = reservedFor(1L);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(FOUND);
+        when(custodyRepository.findByIdForUpdate(610L)).thenReturn(Optional.of(state));
+        when(opsPort.verifyAndConsumeHandoverCredential(1L, "WRONG")).thenReturn(false);
+
+        var exception = assertThrows(ResponseStatusException.class,
+                () -> claimReviewService.completeHandover(STAFF, 1L, "WRONG", "Student ID checked"));
+
+        assertStatus(HttpStatus.FORBIDDEN, exception);
+        assertEquals(ClaimStatus.APPROVED, claim.getStatus());
+        assertEquals(CustodyStatus.RESERVED, state.getCustodyStatus());
+        verify(reportLifecycle, never()).closeReport(anyLong());
+        verify(opsPort).recordAuditEvent(STAFF, "HANDOVER_CODE_REJECTED", "CLAIM-1", "DENIED");
+    }
+
+    @Test
+    void handoverCompletesClaimReturnsItemAndClosesEverythingElse() {
+        Claim claim = claimWithId(1L, 2012L, ClaimStatus.APPROVED);
+        Claim competing = claimWithId(2L, 3000L, ClaimStatus.ON_HOLD);
+        Claim alreadyWithdrawn = claimWithId(3L, 4000L, ClaimStatus.WITHDRAWN);
+        ItemCustodyState state = reservedFor(1L);
+        when(claimRepository.findById(1L)).thenReturn(Optional.of(claim));
+        when(reportPort.lockReportForUpdate(610L)).thenReturn(FOUND);
+        when(custodyRepository.findByIdForUpdate(610L)).thenReturn(Optional.of(state));
+        when(opsPort.verifyAndConsumeHandoverCredential(1L, "CODE-1")).thenReturn(true);
+        when(claimRepository.findByFoundReportId(610L)).thenReturn(List.of(claim, competing, alreadyWithdrawn));
+
+        claimReviewService.completeHandover(STAFF, 1L, "CODE-1", "Student ID checked");
+
+        assertEquals(ClaimStatus.COMPLETED, claim.getStatus());
+        assertEquals(CustodyStatus.RETURNED, state.getCustodyStatus());
+        assertEquals(ClaimStatus.REJECTED, competing.getStatus());
+        assertEquals(ClaimStatus.WITHDRAWN, alreadyWithdrawn.getStatus());
+        verify(reportLifecycle).closeReport(610L);
+        verify(reportLifecycle).closeReport(510L);
+        verify(opsPort).recordAuditEvent(STAFF, "HANDOVER_COMPLETED", "CLAIM-1", "APPROVED -> COMPLETED");
     }
 
     @Test

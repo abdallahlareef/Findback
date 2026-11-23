@@ -33,6 +33,7 @@ public class ClaimReviewService {
     private final DoveEvaluationPort dovePort;
     private final OperationsPort opsPort;
     private final ClaimantDirectoryPort directoryPort;
+    private final ReportLifecyclePort reportLifecyclePort;
 
     public ClaimReviewService(ClaimRepository claimRepo,
                               ItemCustodyStateRepository custodyStateRepo,
@@ -41,7 +42,8 @@ public class ClaimReviewService {
                               ReportLookupPort reportPort,
                               DoveEvaluationPort dovePort,
                               OperationsPort opsPort,
-                              ClaimantDirectoryPort directoryPort) {
+                              ClaimantDirectoryPort directoryPort,
+                              ReportLifecyclePort reportLifecyclePort) {
         this.claimRepo = claimRepo;
         this.custodyStateRepo = custodyStateRepo;
         this.reviewRepo = reviewRepo;
@@ -50,6 +52,7 @@ public class ClaimReviewService {
         this.dovePort = dovePort;
         this.opsPort = opsPort;
         this.directoryPort = directoryPort;
+        this.reportLifecyclePort = reportLifecyclePort;
     }
 
     public List<Claim> getAllClaims() {
@@ -84,12 +87,14 @@ public class ClaimReviewService {
         for (Claim claim : claims) {
             if (claim.getStatus() == WITHDRAWN || claim.getStatus() == COMPLETED) continue;
             if (itemsClaimedByReviewer.contains(claim.getFoundReportId())) continue;
+            ItemCustodyState custody = custodyByItem.get(claim.getFoundReportId());
+            // Once an item is back with its owner, the auto-closed competing claims need no review.
+            if (custody != null && custody.getCustodyStatus() == CustodyStatus.RETURNED) continue;
             ReportSummaryDto found = foundReports.computeIfAbsent(claim.getFoundReportId(), reportPort::getReportById);
             if (staffId.equals(found.authorId())) continue;
 
             DoveSummaryDto dove = dovePort.evaluateOrGetSummary(claim.getClaimId(), claim.getLostReportId(), claim.getFoundReportId());
             boolean pendingSupplement = dovePort.hasPendingSupplement(claim.getClaimId());
-            ItemCustodyState custody = custodyByItem.get(claim.getFoundReportId());
             long competing = activeClaimsPerItem.getOrDefault(claim.getFoundReportId(), 0L)
                     - (ACTIVE.contains(claim.getStatus()) ? 1 : 0);
 
@@ -333,6 +338,65 @@ public class ClaimReviewService {
         opsPort.recordAuditEvent(reviewerId, "CLAIM_DECISION_" + decision,
                 "CLAIM-" + claimId, prevStatus + " -> " + nextStatus);
 
+        return claim;
+    }
+
+    /**
+     * Final step of the lifecycle: the verified owner collects the item at the desk. The claim is
+     * completed, the item marked RETURNED, both reports closed, and any competing claims closed
+     * (FR-11, FR-12, T09, T10).
+     */
+    @Transactional
+    public Claim completeHandover(Long staffId, Long claimId, String handoverCode, String identityCheckNotes) {
+        String code = required(handoverCode, "Enter the claimant's one-time handover code.");
+        String notes = required(identityCheckNotes, "Record the identity check performed at handover (FR-12).");
+
+        Claim claim = findClaim(claimId);
+        Long foundReportId = claim.getFoundReportId();
+        // Same lock order as approval and intake (found report, then custody row), so two desks
+        // cannot release the same item at once.
+        ReportSummaryDto foundReport = reportPort.lockReportForUpdate(foundReportId);
+        assertNotInvolved(staffId, claim, foundReport, "CLAIM-" + claimId);
+        if (claim.getStatus() != APPROVED) {
+            throw error(HttpStatus.CONFLICT, "Only APPROVED claims can be handed over (current status: " + claim.getStatus() + ").");
+        }
+        ItemCustodyState custody = custodyStateRepo.findByIdForUpdate(foundReportId)
+                .orElseThrow(() -> error(HttpStatus.CONFLICT, "No custody record exists for this item."));
+        if (custody.getCustodyStatus() != CustodyStatus.RESERVED || !claimId.equals(custody.getReservedByClaimId())) {
+            throw error(HttpStatus.CONFLICT, "The item is not reserved for this claim (custody state: " + custody.getCustodyStatus() + ").");
+        }
+        if (!opsPort.verifyAndConsumeHandoverCredential(claimId, code)) {
+            opsPort.recordAuditEvent(staffId, "HANDOVER_CODE_REJECTED", "CLAIM-" + claimId, "DENIED");
+            throw error(HttpStatus.FORBIDDEN, "The handover code is invalid, expired or already used.");
+        }
+
+        custody.setCustodyStatus(CustodyStatus.RETURNED);
+        custodyStateRepo.save(custody);
+        custodyEventRepo.save(new CustodyEvent(foundReportId, staffId, "RELEASED_TO_OWNER",
+                Objects.requireNonNullElse(custody.getStorageReference(), "UNRECORDED"), notes, true));
+
+        claim.setStatus(COMPLETED);
+        claimRepo.save(claim);
+        reviewRepo.save(new AdminReview(claimId, staffId, "HANDOVER", APPROVED.name(), COMPLETED.name(), notes, null));
+
+        for (Claim other : claimRepo.findByFoundReportId(foundReportId)) {
+            if (other.getClaimId().equals(claimId) || !ACTIVE.contains(other.getStatus())) continue;
+            ClaimStatus previous = other.getStatus();
+            other.setStatus(REJECTED);
+            claimRepo.save(other);
+            reviewRepo.save(new AdminReview(other.getClaimId(), staffId, "AUTO_CLOSED", previous.name(), REJECTED.name(),
+                    "Item returned to another verified claimant (claim #" + claimId + ").", null));
+            opsPort.sendSafeNotification(other.getClaimantId(), "Your claim #" + other.getClaimId()
+                    + " has been closed because the item was returned to its owner after verification.");
+            opsPort.recordAuditEvent(staffId, "CLAIM_AUTO_CLOSED", "CLAIM-" + other.getClaimId(), previous + " -> " + REJECTED);
+        }
+
+        reportLifecyclePort.closeReport(foundReportId);
+        reportLifecyclePort.closeReport(claim.getLostReportId());
+
+        opsPort.sendSafeNotification(claim.getClaimantId(),
+                "Your item for claim #" + claimId + " has been handed over. This case is now closed.");
+        opsPort.recordAuditEvent(staffId, "HANDOVER_COMPLETED", "CLAIM-" + claimId, APPROVED + " -> " + COMPLETED);
         return claim;
     }
 

@@ -41,6 +41,7 @@ public class ClaimCustodyController {
     public record StaffDecisionRequest(String action, String reason, String physicalCheckNotes) {}
     public record RiskEscalationRequest(RiskTier riskTier, String reason) {}
     public record DisputeResolutionRequest(String resolution) {}
+    public record HandoverRequest(String handoverCode, String identityCheckNotes) {}
 
     @GetMapping("/mine")
     public List<SafeClaim> myClaims() {
@@ -86,6 +87,13 @@ public class ClaimCustodyController {
     public Claim decideClaim(@PathVariable Long claimId,
                              @RequestBody StaffDecisionRequest req) {
         return service.recordStaffDecision(access.staff().getId(), claimId, req.action(), req.reason(), req.physicalCheckNotes());
+    }
+
+    /** Release the reserved item to the verified owner at the Security Desk. */
+    @PostMapping("/staff/claims/{claimId}/handover")
+    public Claim completeHandover(@PathVariable Long claimId,
+                                  @RequestBody HandoverRequest req) {
+        return service.completeHandover(access.staff().getId(), claimId, req.handoverCode(), req.identityCheckNotes());
     }
 
     @PatchMapping("/staff/claims/{claimId}/risk")

@@ -172,6 +172,41 @@ class ClaimCustodyIntegrationTest {
         assertEquals(id, custody.findById(found).orElseThrow().getReservedByClaimId());
     }
 
+    ResultActions handover(User actor, Long claimId, String notes) throws Exception {
+        return perform(json(post("/api/v1/claims/staff/claims/" + claimId + "/handover"),
+                "{\"handoverCode\":\"ONE-TIME-123\",\"identityCheckNotes\":\"" + notes + "\"}"), actor);
+    }
+
+    @Test
+    void handoverCompletesTheLifecycleAndClosesEverythingElse() throws Exception {
+        Long first = createClaim(owner, lost);
+        Long second = createClaim(rival, rivalLost);
+        intake(staff).andExpect(status().isOk());
+        decide(staff, first, "APPROVE").andExpect(status().isOk());
+
+        handover(owner, first, "Student ID checked").andExpect(status().isForbidden());
+        handover(staff, first, "").andExpect(status().isBadRequest());
+        handover(staff, second, "Student ID checked").andExpect(status().isConflict());
+
+        handover(staff, first, "Student ID 2012 checked against account").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        assertEquals(CustodyStatus.RETURNED, custody.findById(found).orElseThrow().getCustodyStatus());
+        assertEquals(ClaimStatus.REJECTED, claims.findById(second).orElseThrow().getStatus());
+        assertEquals(edu.findback.report.ReportStatus.CLOSED, reports.findById(found).orElseThrow().getStatus());
+        assertEquals(edu.findback.report.ReportStatus.CLOSED, reports.findById(lost).orElseThrow().getStatus());
+        assertEquals(edu.findback.report.ReportStatus.ACTIVE, reports.findById(rivalLost).orElseThrow().getStatus());
+
+        handover(staff, first, "Again").andExpect(status().isConflict());
+        intake(staff).andExpect(status().isConflict());
+        perform(get("/api/v1/claims/mine"), owner)
+                .andExpect(jsonPath("$[0].status").value("COMPLETED"))
+                .andExpect(jsonPath("$[0].withdrawable").value(false));
+        perform(get("/api/v1/claims/staff/cases"), otherStaff).andExpect(jsonPath("$.length()").value(0));
+        perform(get("/api/reports/" + rivalLost + "/candidates"), rival).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
     @Test
     void blockedApprovalExplainsWhy() throws Exception {
         Long id = createClaim(owner, lost);
