@@ -53,6 +53,14 @@ public class MockCrossModuleAdapters {
             }
 
             @Override
+            public boolean verifyAndConsumeHandoverCredential(Long claimId, String code) {
+                // Placeholder until Member 4's credential service exists: no real code is issued yet,
+                // so any non-blank code is accepted. Must be replaced before release.
+                log.warn("[M4-HANDOVER-MOCK] Accepting handover code for Claim #{} WITHOUT verification", claimId);
+                return code != null && !code.isBlank();
+            }
+
+            @Override
             public void revokeActiveHandoverCredential(Long claimId, String reason) {
                 log.info("[M4-HANDOVER-MOCK] Revoked credential for Claim #{} | Reason: {}", claimId, reason);
             }

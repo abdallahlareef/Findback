@@ -260,6 +260,20 @@ class ClaimConcurrencyPostgresTest {
     }
 
     @Test
+    void twoDesksHandingOverTheSameItemReleaseItOnce() throws Exception {
+        Long id = createClaim(claimant("owner@pg.test"));
+        perform(intakeRequest(), staff).andExpect(status().isOk());
+        perform(approveRequest(id), staff).andExpect(status().isOk());
+        MockHttpServletRequestBuilder handover = json(post("/api/v1/claims/staff/claims/" + id + "/handover"),
+                "{\"handoverCode\":\"ONE-TIME-123\",\"identityCheckNotes\":\"Student ID checked\"}");
+
+        assertEquals(expected(1, 1), race(List.of(call(handover, staff), call(handover, otherStaff))));
+        assertEquals(ClaimStatus.COMPLETED, claims.findById(id).orElseThrow().getStatus());
+        assertEquals(CustodyStatus.RETURNED, custody.findById(found).orElseThrow().getCustodyStatus());
+        assertEquals(1, custodyEvents.findAll().stream().filter(e -> e.getEventType().equals("RELEASED_TO_OWNER")).count());
+    }
+
+    @Test
     void parallelFirstIntakesCreateOneCustodyRecord_FR11() throws Exception {
         List<Integer> statuses = race(List.of(call(intakeRequest(), staff), call(intakeRequest(), otherStaff)));
 

@@ -39,6 +39,8 @@ export function StaffReviewDashboard() {
   const [riskTier, setRiskTier] = useState<RiskTier>('HIGH')
   const [riskReason, setRiskReason] = useState('')
   const [disputeResolution, setDisputeResolution] = useState('')
+  const [handoverCode, setHandoverCode] = useState('')
+  const [identityNotes, setIdentityNotes] = useState('')
 
   const [busy, setBusy] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -91,6 +93,25 @@ export function StaffReviewDashboard() {
     if (ok) {
       setStorageRef('')
       setConditionNotes('')
+    }
+  }
+
+  async function handleHandover(e: FormEvent) {
+    e.preventDefault()
+    if (!activeCase) return
+    if (!handoverCode.trim() || !identityNotes.trim()) {
+      setErrorMsg("Enter the claimant's one-time handover code and record the identity check (FR-12).")
+      return
+    }
+    if (!window.confirm(`Release found item #${activeCase.foundReportId} to ${activeCase.claimantName}? This closes the case.`)) return
+    const ok = await run(
+      () => claimsApi.completeHandover(activeCase.claimId, handoverCode.trim(), identityNotes.trim()),
+      `Item handed over to ${activeCase.claimantName}. Claim #${activeCase.claimId} is complete and the reports are closed.`,
+      'The handover was not recorded.',
+    )
+    if (ok) {
+      setHandoverCode('')
+      setIdentityNotes('')
     }
   }
 
@@ -303,9 +324,48 @@ export function StaffReviewDashboard() {
                 <div className="mt-3 text-sm text-slate-700">
                   <p><strong>Storage location:</strong> {activeCase.storageReference}</p>
                   {activeCase.custodyStatus === 'RESERVED' ? (
-                    <p className="mt-1 text-xs text-blue-700">
-                      Reserved for approved claim #{activeCase.reservedByClaimId}. No other claim can be approved for this item.
-                    </p>
+                    <>
+                      <p className="mt-1 text-xs text-blue-700">
+                        Reserved for approved claim #{activeCase.reservedByClaimId}. No other claim can be approved for this item.
+                      </p>
+                      {activeCase.status === 'APPROVED' && activeCase.reservedByClaimId === activeCase.claimId && (
+                        <form onSubmit={handleHandover} className="mt-3 space-y-3 rounded border border-emerald-200 bg-emerald-50 p-3">
+                          <p className="text-xs font-semibold text-emerald-900">Complete handover at the Security Desk</p>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label htmlFor="handover-code" className="block text-xs font-semibold text-slate-700">One-time handover code *</label>
+                              <input
+                                id="handover-code"
+                                type="text"
+                                autoComplete="off"
+                                value={handoverCode}
+                                onChange={(e) => setHandoverCode(e.target.value)}
+                                placeholder="Code shown by the claimant"
+                                className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor="identity-notes" className="block text-xs font-semibold text-slate-700">Identity check performed *</label>
+                              <input
+                                id="identity-notes"
+                                type="text"
+                                value={identityNotes}
+                                onChange={(e) => setIdentityNotes(e.target.value)}
+                                placeholder="e.g. Student ID card matched account name"
+                                className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+                              />
+                            </div>
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={busy}
+                            className="rounded bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                          >
+                            Release item to owner
+                          </button>
+                        </form>
+                      )}
+                    </>
                   ) : activeCase.custodyStatus === 'IN_CUSTODY' ? (
                     <p className="mt-1 text-xs text-emerald-700">Physical custody confirmed. The item can be reserved by one approved claim.</p>
                   ) : (
