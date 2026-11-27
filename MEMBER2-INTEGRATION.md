@@ -170,3 +170,12 @@ The previously disabled standalone Member 3 context test remains disabled; the s
 5. The existing schema treats every non-party ADMIN as an authorized reviewer. Case-assignment restrictions require a team-provided assignment model if one is intended.
 
 The standalone Member 2 H2 demo database is not migrated automatically. Keep it as historical synthetic data; start integrated reports with real shared report IDs.
+
+## Completion audit (27 November 2026)
+
+See `MEMBER2-AUDIT.md` for the requirements matrix, reproduced defects, fixes and remaining work.
+Core features are implemented, but final Member 2 sign-off is pending history traceability,
+versioned migrations, PostgreSQL/real-backend acceptance checks and shared integration gaps.
+The audit fixed invalidation of a first HIGH-risk approval after evidence changes and removed
+pending-supplement prompts from closed claimant views. Current full backend result: 151 passed,
+5 PostgreSQL tests skipped, no failures/errors. The earlier handoff PDF predates this audit.

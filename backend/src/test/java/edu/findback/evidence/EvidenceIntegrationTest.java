@@ -199,4 +199,29 @@ class EvidenceIntegrationTest {
         perform(json("/api/evidence/claims/"+second+"/supplements",supplement(key,DATA)),owner).andExpect(status().isConflict());
         perform(get("/api/evidence/claims/"+first),owner).andExpect(jsonPath("$.pendingRequestId").value(key)).andExpect(jsonPath("$.submissionsUsed").value(1));
     }
+
+    @Test void evidenceChangeInvalidatesFirstHighRiskApproval() throws Exception {
+        baselines(); Long id=createClaim();
+        Claim claim=claims.findById(id).orElseThrow();
+        claim.setRiskTier(RiskTier.HIGH); claim.recordFirstApproval(staff.getId()); claims.save(claim);
+        perform(json("/api/evidence/reports/"+found+"/finder-corrections",
+            supplement(UUID.randomUUID().toString(),DATA)),finder).andExpect(status().isOk());
+        Claim changed=claims.findById(id).orElseThrow();
+        assertNull(changed.getFirstApproverId(),"Approval of an earlier evidence version must not survive a correction");
+        assertEquals(ClaimStatus.ON_HOLD,changed.getStatus());
+    }
+
+    @Test void closedClaimDoesNotOfferPendingSupplement() throws Exception {
+        baselines(); Long id=createClaim(); String key=UUID.randomUUID().toString(); request(id,key);
+        for (ClaimStatus state : new ClaimStatus[]{ClaimStatus.REJECTED,ClaimStatus.WITHDRAWN,ClaimStatus.COMPLETED}) {
+            Claim claim=claims.findById(id).orElseThrow(); claim.setStatus(state); claims.save(claim);
+            perform(get("/api/evidence/claims/"+id),owner).andExpect(status().isOk())
+                .andExpect(jsonPath("$.pendingRequestId").isEmpty())
+                .andExpect(jsonPath("$.status").value(switch(state) {
+                    case REJECTED -> "Rejected"; case WITHDRAWN -> "Withdrawn"; default -> "Completed";
+                }));
+            perform(json("/api/evidence/claims/"+id+"/supplements",supplement(key,DATA)),owner)
+                .andExpect(status().isConflict());
+        }
+    }
 }
