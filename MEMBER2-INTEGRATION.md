@@ -179,3 +179,9 @@ versioned migrations, PostgreSQL/real-backend acceptance checks and shared integ
 The audit fixed invalidation of a first HIGH-risk approval after evidence changes and removed
 pending-supplement prompts from closed claimant views. Current full backend result: 151 passed,
 5 PostgreSQL tests skipped, no failures/errors. The earlier handoff PDF predates this audit.
+
+PostgreSQL follow-up: the 5 previously skipped concurrency tests and all 20 Member 2 evidence
+integration tests subsequently passed on an isolated PostgreSQL 19 test instance (25 passed,
+0 failures/errors/skips across two targeted runs). The temporary server was stopped afterward.
+See MEMBER2-AUDIT.md for isolation details and remaining gaps. This does not certify the still-mocked
+Member 4 operations or replace final real-backend browser acceptance testing.

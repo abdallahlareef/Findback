@@ -34,7 +34,7 @@ The first two regression tests failed before the fixes and passed afterward.
 
 - **Comparison-history traceability:** manual clue-group names are used to calculate distinct matches but are not stored on VerificationAttempt. The database retains reviewer, timestamp, version IDs, outcomes and reason; the staff history UI currently shows only strength, count and reason, and the Summary DTO omits the timestamp. Persist normalized clue groups and expose/render reviewer, time, source version IDs and individual outcomes for an explainable history. Preserve legacy rows as unknown rather than inventing old group values. Re-test staff-only visibility.
 - **Versioned database changes:** no Flyway/Liquibase or versioned Member 2 migration was found. Runtime configuration uses Hibernate ddl-auto=update. The allocation asks each owner to maintain migrations. Agree the shared migration mechanism with Member 1, add the m2_ schema/constraints and any history columns, then test an upgrade on a disposable database.
-- **Real PostgreSQL verification:** this audit ran H2 tests. The five opt-in PostgreSQL concurrency tests were skipped because no dedicated test database was configured. Add/run evidence-specific duplicate-supplement and evidence-change/approval concurrency checks on a disposable PostgreSQL database; do not point destructive test setup at the working findback database.
+- **PostgreSQL verification follow-up completed:** the five previously skipped concurrency tests and all 20 EvidenceIntegrationTest cases passed on PostgreSQL 19 in an isolated temporary instance on port 55439. This includes concurrent duplicate-supplement retries, counters, privacy, closed claims and first/final approval invalidation. A dedicated simultaneous evidence-change-versus-approval race test is still not present; passing these tests is not coverage of every possible race.
 - **Final demonstration and updated handoff:** run the full shared UI against a real test backend as finder, claimant and independent staff, including two supplements, denial of a third, closed/reopened claims, correction after first/final approval and non-leakage. The previous mocked browser test validates navigation/session wiring, not all real API/database behavior. Update the handoff PDF after the remaining items are verified; the earlier PDF is not a completion certificate.
 
 ### Shared integration - coordinate ownership
@@ -59,3 +59,28 @@ The first two regression tests failed before the fixes and passed afterward.
 2. Agree search gating and migration boundaries with Member 1.
 3. Run dedicated PostgreSQL and real-backend UI tests, connect M4 operations when supplied.
 4. Update the handoff/test evidence, obtain team review, then sign off Member 2's integrated deliverable.
+
+## PostgreSQL follow-up - 27 November 2026, 21:11 local time
+
+User authorized the SQL tests. The working role lacks CREATEDB, so the run used a new,
+password-protected PostgreSQL 19 cluster at `D:/tmp/findback-pg-audit-20261127/data`, bound
+only to `127.0.0.1:55439`. Verified `current_database() = findback_member2_test`, port 55439,
+and zero public tables before testing. The existing PostgreSQL server/database on port
+5432 was not used for destructive tests.
+
+- `ClaimConcurrencyPostgresTest`: 5 passed, 0 failures/errors/skips.
+- `EvidenceIntegrationTest`: 20 passed, 0 failures/errors/skips.
+- Confirmed the latter run's JDBC URL, PostgreSQL driver and database version 19.0 in the log.
+- These are two targeted runs (25 tests), not a claim that the whole 156-test suite ran on PostgreSQL.
+- OperationsPort remains mocked, so real credential revocation/audit persistence are not certified.
+- Temporary server stopped successfully; temporary password file removed. Cluster files remain
+  stopped under the temporary directory. No permanent application configuration was changed.
+- Logs: `backend/target/member2-postgres-concurrency.log` and
+  `backend/target/member2-postgres-evidence.log` (local generated output, not tracked).
+
+For future reruns, use a dedicated test database. The five concurrency tests read
+`FINDBACK_PG_TEST_URL`, `FINDBACK_PG_TEST_USER`, `FINDBACK_PG_TEST_PASSWORD`.
+EvidenceIntegrationTest can be pointed at that same dedicated instance using process-local
+`SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`, and
+`SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver`. Run the suites sequentially;
+they create/drop tables. Never use the working application database for these tests.
