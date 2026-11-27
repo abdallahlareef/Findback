@@ -47,7 +47,9 @@ export function App() {
         </Route>
         <Route path="/staff/reviews" element={<Navigate to="/admin" replace />} />
       </Route>
-      <Route path="/evidence" element={<EvidenceWorkspace />} />
+      <Route element={user?.role === 'ADMIN' ? <AdminLayout /> : <AppLayout />}>
+        <Route path="/evidence" element={<EvidenceWorkspace key={user?.id} />} />
+      </Route>
     </Route>
     <Route path="*" element={<Navigate to={home} replace />} />
   </Routes>
