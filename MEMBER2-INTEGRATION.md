@@ -1,9 +1,41 @@
 # Member 2 integration: private evidence and DOVE
 
-Work branch: `codex/member2-integration`.
+The original Member 2 integration was merged into `main` through PR #3.
+The shared-login follow-up is on local branch `fix/member2-shared-login`, based on
+`main` commit `6109eee` (also `origin/main` after fetching on 27 November 2026).
 Working folder: `D:\github\Findback-member2-integration`.
-Based on the locally saved `main` commit `27fe3d8`; no remote fetch, merge, commit or push was performed.
-The original checkout and the three standalone Member 2 prototype folders remain available.
+The original checkout and standalone Member 2 prototype folders remain historical demos.
+
+## Shared login follow-up (27 November 2026)
+
+- Member 1 owns login, registration, account state and report creation. `/login` and
+  `/register` are the only account forms in the integrated frontend.
+- `/evidence` uses `AuthContext`, the shared API client and the existing protected route.
+  It keeps the student or staff layout, including the shared Log out action.
+- Evidence no longer maintains a separate account/session, login form, registration form,
+  logout call or report-creation form. Create reports through Report Lost / Report Found,
+  then choose Evidence > Load my reports to save the baseline or a finder correction.
+- Staff go directly to claim evidence review; student report controls are hidden for them.
+  Backend role/ownership checks remain the authority. Evidence state is discarded when
+  the protected page unmounts on logout or the signed-in account changes.
+- The old integration-demo banner was removed from the user page. Team dependencies
+  remain documented below; its removal does not claim Member 4 integration is complete.
+
+Validation for this follow-up: production frontend build passed; all three changed
+frontend source files passed ESLint; 20 Member 2 backend tests passed (0 failures/errors).
+`frontend/tests/member2-session.cjs` passed in headless Edge with mocked API responses:
+shared login, anonymous redirect, baseline write with CSRF, reload, logout, account switching,
+student/staff navigation and DOVE display. This browser test is a frontend regression check,
+not an end-to-end PostgreSQL test. Backend tests use isolated H2 databases.
+
+Full `npm run lint` still reports two pre-existing errors in unchanged team files:
+`context/AuthContext.tsx` (mixed exports for Fast Refresh) and `pages/CandidatesPage.tsx`
+(synchronous state updates in an effect). These remain separate team cleanup items.
+
+To repeat the browser regression, start Vite on port 5178 and run
+`node tests/member2-session.cjs` from `frontend` with Playwright available. Set
+`PLAYWRIGHT_MODULE` to an existing Playwright installation if it is not installed locally;
+`FINDBACK_UI_URL` can override the default `http://127.0.0.1:5178`. Edge is required.
 
 ## Run the integrated version
 
@@ -34,7 +66,7 @@ Register separate invented claimant and finder accounts. Each creates a report a
 The claimant selects their lost report, finds candidates and submits a claim. Keep the claim number for later retrieval.
 Reloading or signing in again preserves server evidence; use **Load my reports** or enter the claim number to reload it.
 
-A team-provisioned `ADMIN` account can select **Staff review**, load a claim, view both histories, request up to two supplements,
+A team-provisioned `ADMIN` account can open **Evidence review**, load a claim, view both histories, request up to two supplements,
 record manual comparisons and append staff corrections. Registration always creates ordinary users; there is no public staff-role toggle.
 Ask Member 1 for the project's staff-account provisioning process if no staff account exists.
 
@@ -81,8 +113,7 @@ Outcomes: `MATCH`, `UNKNOWN`, `CONTRADICTION`. A MATCH requires a useful private
 
 Member 3 consumes `ReportLookupPort` and `DoveEvaluationPort` implemented by `EvidenceService`.
 The default application no longer uses fixed report 501/602 or a synthetic Strong result.
-Its existing claim controller now obtains the actor from the session. The original standalone staff dashboard files remain in source;
-the active app is the connected evidence workspace rather than the old dashboard populated with hardcoded cases.
+Its claim controller obtains the actor from the session. The active application uses Member 1's shared routes and Member 3's student/admin workflows, with Member 2 evidence available at `/evidence`.
 
 ## Database design
 
@@ -135,7 +166,22 @@ The previously disabled standalone Member 3 context test remains disabled; the s
 1. Member 4's `OperationsPort` is still a logging mock. Audit persistence, notifications and actual handover-token revocation must be supplied by Member 4 and tested together. A logged revocation is not proof that a real token was invalidated.
 2. Use invented evidence. The team's PostgreSQL configuration still needs its deployment storage protection, restricted database accounts, migrations, backup/retention and HTTPS arrangements agreed and tested. This change does not claim encrypted storage or production readiness.
 3. Real PostgreSQL concurrency/deployment verification and full Member 3/4 return-flow tests remain team integration checks. H2 passing is not a PostgreSQL certification.
-4. This checkout uses the locally saved team code. Compare against newer teammate commits before merging. No remote history or newer uploads were assumed.
+4. The follow-up was checked against fetched `origin/main` on 27 November 2026. Review any subsequent teammate changes before merging it.
 5. The existing schema treats every non-party ADMIN as an authorized reviewer. Case-assignment restrictions require a team-provided assignment model if one is intended.
 
 The standalone Member 2 H2 demo database is not migrated automatically. Keep it as historical synthetic data; start integrated reports with real shared report IDs.
+
+## Completion audit (27 November 2026)
+
+See `MEMBER2-AUDIT.md` for the requirements matrix, reproduced defects, fixes and remaining work.
+Core features are implemented, but final Member 2 sign-off is pending history traceability,
+versioned migrations, PostgreSQL/real-backend acceptance checks and shared integration gaps.
+The audit fixed invalidation of a first HIGH-risk approval after evidence changes and removed
+pending-supplement prompts from closed claimant views. Current full backend result: 151 passed,
+5 PostgreSQL tests skipped, no failures/errors. The earlier handoff PDF predates this audit.
+
+PostgreSQL follow-up: the 5 previously skipped concurrency tests and all 20 Member 2 evidence
+integration tests subsequently passed on an isolated PostgreSQL 19 test instance (25 passed,
+0 failures/errors/skips across two targeted runs). The temporary server was stopped afterward.
+See MEMBER2-AUDIT.md for isolation details and remaining gaps. This does not certify the still-mocked
+Member 4 operations or replace final real-backend browser acceptance testing.

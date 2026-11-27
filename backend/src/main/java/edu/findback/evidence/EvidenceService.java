@@ -104,15 +104,25 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
     private PairView pairView(EvidencePair pair) {
         return new PairView(pair.pendingRequest==null ? "UnderReview" : "MoreInformationRequested", pair.submissions,pair.pendingRequest,history(pair.stream()));
     }
-    private PairView ownPairView(EvidencePair pair) {
-        return new PairView(pair.pendingRequest==null ? "UnderReview" : "MoreInformationRequested",pair.submissions,pair.pendingRequest,
+    private PairView ownPairView(EvidencePair pair, Claim claim) {
+        // Keep detailed review flags private, but never advertise a submission on a closed case.
+        String status=switch(claim.getStatus()) {
+            case COMPLETED -> "Completed";
+            case REJECTED -> "Rejected";
+            case WITHDRAWN -> "Withdrawn";
+            case APPROVED -> "Approved";
+            default -> pair.pendingRequest==null ? "UnderReview" : "MoreInformationRequested";
+        };
+        boolean closed=claim.getStatus()==ClaimStatus.COMPLETED || claim.getStatus()==ClaimStatus.REJECTED
+            || claim.getStatus()==ClaimStatus.WITHDRAWN;
+        return new PairView(status,pair.submissions,closed ? null : pair.pendingRequest,
             history(pair.stream()).stream().filter(v->v.provenance().equals("CLAIMANT")).toList());
     }
     public PairView ownClaim(Long claimId) {
         Claim c=claim(claimId); User actor=access.current();
         if(!c.getClaimantId().equals(actor.getId())) throw error(HttpStatus.FORBIDDEN,"Claim access denied.");
         audit(actor.getId(),"EVIDENCE_OWN_READ","CLAIM-"+claimId);
-        return ownPairView(pair(c));
+        return ownPairView(pair(c),c);
     }
     public StaffView staffView(Long claimId) {
         Claim c=claim(claimId); User actor=reviewer(c); EvidencePair p=pair(c);
@@ -148,7 +158,7 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
         if(duplicate.isPresent()) {
             if(!duplicate.get().actorId.equals(actor.getId()) || !duplicate.get().provenance.equals("CLAIMANT") || !duplicate.get().data().equals(data) || !Objects.equals(duplicate.get().reason,why))
                 throw error(HttpStatus.CONFLICT,"Request ID already used with different content.");
-            return ownPairView(p);
+            return ownPairView(p,c);
         }
         if(c.getStatus()==ClaimStatus.COMPLETED || c.getStatus()==ClaimStatus.WITHDRAWN || c.getStatus()==ClaimStatus.REJECTED)
             throw error(HttpStatus.CONFLICT,"This case is closed for submissions.");
@@ -160,7 +170,7 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
             hold(linked,actor.getId()); compare(linked,p);
         }
         audit(actor.getId(),"EVIDENCE_SUPPLEMENT","CLAIM-"+claimId);
-        return ownPairView(p);
+        return ownPairView(p,c);
     }
     public VersionView finderCorrection(Long reportId, String requestId, EvidenceData data, String reason) {
         User actor=access.current(); Report r=lockReport(reportId); owns(r,actor);
@@ -259,6 +269,14 @@ public class EvidenceService implements DoveEvaluationPort, ReportLookupPort {
         }
     }
     private void hold(Claim c,Long actor) {
+        if(c.getStatus()==ClaimStatus.UNDER_REVIEW && c.isAwaitingSecondApproval()) {
+            // The first review was of an older snapshot. Restart both approvals after any evidence change.
+            c.setStatus(ClaimStatus.ON_HOLD);
+            if(actor!=null) reviews.save(new AdminReview(c.getClaimId(),actor,"EVIDENCE_CHANGED",
+                "UNDER_REVIEW","ON_HOLD","Evidence changed after the first approval; both reviewers must reassess.",null));
+            audit(actor,"EVIDENCE_HOLD","CLAIM-"+c.getClaimId());
+            return;
+        }
         if(c.getStatus()!=ClaimStatus.APPROVED) return;
         custody.findByIdForUpdate(c.getFoundReportId()).ifPresent(s->{
             if(c.getClaimId().equals(s.getReservedByClaimId())) { s.setReservedByClaimId(null); s.setCustodyStatus(CustodyStatus.IN_CUSTODY); }
